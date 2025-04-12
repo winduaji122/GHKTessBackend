@@ -2,8 +2,19 @@
 const path = require('path');
 const fs = require('fs');
 
-// Load environment variables
-require('dotenv').config({ path: path.join(__dirname, '.env') });
+// Load environment variables based on NODE_ENV
+const NODE_ENV = process.env.NODE_ENV || 'development';
+const envFile = NODE_ENV === 'production' ? '.env.production' : '.env';
+const envPath = path.join(__dirname, envFile);
+
+// Check if env file exists
+if (fs.existsSync(envPath)) {
+  console.log(`Loading environment from ${envFile}`);
+  require('dotenv').config({ path: envPath });
+} else {
+  console.log(`${envFile} not found, loading default .env`);
+  require('dotenv').config();
+}
 
 // Third-party modules
 const express = require('express');
