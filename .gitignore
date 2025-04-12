@@ -23,3 +23,4 @@ Thumbs.db
 logs/*
 !logs/.gitkeep
 .env
+.env.production
