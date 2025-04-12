@@ -8,11 +8,16 @@
   ],
   "routes": [
     {
+      "src": "/api/(.*)",
+      "dest": "vercel-server.js"
+    },
+    {
       "src": "/(.*)",
       "dest": "vercel-server.js"
     }
   ],
   "env": {
     "NODE_ENV": "production"
-  }
+  },
+  "framework": null
 }

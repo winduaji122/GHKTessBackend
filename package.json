@@ -11,7 +11,8 @@
     "test": "jest",
     "lint": "eslint .",
     "seed": "node scripts/seedDatabase.js",
-    "build": "echo 'No build step required'"
+    "build": "echo 'No build step required'",
+    "vercel-build": "echo 'Build step completed'"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
