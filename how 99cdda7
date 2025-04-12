@@ -1,0 +1,8 @@
+[33m99cdda7[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmaster[m[33m, [m[1;31morigin/master[m[33m)[m refresh token clear
+[33m9ab998c[m Improve MySQL connection handling and logging in databaseConfig.js
+[33m2c2e916[m Implementasi featured dan spotlight posts
+[33m7d926f3[m perubahan 6
+[33m7b4ae0f[m okok
+[33mf67c88b[m perubahan 3
+[33mfce5a5d[m Update post routing and dependencies
+[33m66869fe[m Initial commit of backend project with .gitignore

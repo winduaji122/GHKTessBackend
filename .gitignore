@@ -1,0 +1,25 @@
+# Dependensi
+node_modules/
+
+# File log
+*.log
+
+# File sistem operasi
+.DS_Store
+Thumbs.db
+
+# File konfigurasi IDE/editor (opsional)
+.vscode/
+.idea/
+
+# File build atau output (jika ada)
+/dist
+/build
+
+# File temporary
+*.tmp
+*.temp
+
+logs/*
+!logs/.gitkeep
+.env
