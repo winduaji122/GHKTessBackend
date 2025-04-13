@@ -15,8 +15,14 @@ const { app } = require('./server');
 const cors = require('cors');
 const corsOptions = {
   origin: function (origin, callback) {
-    // Untuk debugging dan pengembangan, izinkan semua origin
-    callback(null, true);
+    const allowedOrigins = ['https://ghk-tess.vercel.app', 'http://localhost:5173'];
+    // Allow requests with no origin (like mobile apps or curl requests)
+    if (!origin || allowedOrigins.indexOf(origin) !== -1) {
+      callback(null, true);
+    } else {
+      console.log('Blocked by CORS:', origin);
+      callback(new Error('Not allowed by CORS'));
+    }
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
