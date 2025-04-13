@@ -8,24 +8,29 @@ if (process.env.NODE_ENV !== 'production') {
   require('dotenv').config();
 }
 
+// Create a new Express app for Vercel
+const express = require('express');
+const cors = require('cors');
+const vercelApp = express();
+
+// Configure CORS for Vercel
+const corsOptions = {
+  origin: ['https://ghk-tess.vercel.app', 'http://localhost:5173'],
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-CSRF-Token', 'X-Requested-With', 'Accept', 'Accept-Version', 'Content-Length', 'Content-MD5', 'Date', 'X-Api-Version']
+};
+
+// Apply CORS middleware
+vercelApp.use(cors(corsOptions));
+
+// Handle OPTIONS requests explicitly
+vercelApp.options('*', cors(corsOptions));
+
 // Wrap in try-catch to catch any initialization errors
 try {
   // Import the Express app
   const app = require('./server').app;
-
-  // Add CORS middleware for Vercel
-  app.use((req, res, next) => {
-    res.setHeader('Access-Control-Allow-Origin', 'https://ghk-tess.vercel.app');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Date, X-Api-Version');
-    res.setHeader('Access-Control-Allow-Credentials', 'true');
-
-    if (req.method === 'OPTIONS') {
-      return res.status(200).end();
-    }
-
-    next();
-  });
 
   // Handle serverless function timeouts
   const serverlessTimeout = setTimeout(() => {
@@ -49,8 +54,33 @@ try {
     });
   });
 
-  // Export for Vercel
-  module.exports = app;
+  // Add debug endpoint
+  vercelApp.get('/api/cors-debug', (req, res) => {
+    res.json({
+      message: 'CORS Debug Endpoint',
+      headers: req.headers,
+      origin: req.headers.origin,
+      host: req.headers.host,
+      env: {
+        NODE_ENV: process.env.NODE_ENV,
+        FRONTEND_URL: process.env.FRONTEND_URL
+      },
+      timestamp: new Date().toISOString()
+    });
+  });
+
+  // Use the original app as middleware
+  vercelApp.use((req, res, next) => {
+    // Log request for debugging
+    console.log(`Vercel request: ${req.method} ${req.url}`);
+    console.log('Headers:', req.headers);
+    next();
+  });
+
+  vercelApp.use(app);
+
+  // Export the Vercel app
+  module.exports = vercelApp;
 } catch (error) {
   console.error('Fatal error during serverless function initialization:', error);
 
@@ -65,6 +95,6 @@ try {
     });
   });
 
-  module.exports = fallbackApp;
+  module.exports = vercelApp;
 }
 
