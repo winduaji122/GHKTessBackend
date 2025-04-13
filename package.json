@@ -11,8 +11,8 @@
     "test": "jest",
     "lint": "eslint .",
     "seed": "node scripts/seedDatabase.js",
-    "build": "echo 'No build step required'",
-    "vercel-build": "echo 'Build step completed'",
+    "build": "node vercel-build.js",
+    "vercel-build": "node vercel-build.js",
     "vercel": "node vercel-server.js"
   },
   "dependencies": {

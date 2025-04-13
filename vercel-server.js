@@ -14,7 +14,16 @@ const { app } = require('./server');
 // Configure CORS for Vercel
 const cors = require('cors');
 const corsOptions = {
-  origin: ['https://ghk-tess.vercel.app', 'http://localhost:5173'],
+  origin: function (origin, callback) {
+    const allowedOrigins = ['https://ghk-tess.vercel.app', 'http://localhost:5173'];
+    // Allow requests with no origin (like mobile apps or curl requests)
+    if (!origin || allowedOrigins.indexOf(origin) !== -1) {
+      callback(null, true);
+    } else {
+      console.log('Blocked by CORS:', origin);
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-CSRF-Token', 'X-Requested-With', 'Accept', 'Accept-Version', 'Content-Length', 'Content-MD5', 'Date', 'X-Api-Version']
@@ -25,6 +34,21 @@ app.use(cors(corsOptions));
 
 // Handle OPTIONS requests explicitly
 app.options('*', cors(corsOptions));
+
+// Add CORS debug endpoint
+app.get('/api/cors-debug', (req, res) => {
+  res.json({
+    message: 'CORS Debug Endpoint',
+    headers: req.headers,
+    origin: req.headers.origin,
+    host: req.headers.host,
+    env: {
+      NODE_ENV: process.env.NODE_ENV,
+      FRONTEND_URL: process.env.FRONTEND_URL
+    },
+    timestamp: new Date().toISOString()
+  });
+});
 
 // Handle serverless function timeouts
 const serverlessTimeout = setTimeout(() => {
