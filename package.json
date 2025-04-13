@@ -1,7 +1,7 @@
 {
   "name": "my-backend",
   "version": "1.0.0",
-  "main": "server.js",
+  "main": "vercel-server.js",
   "scripts": {
     "start": "node start.js",
     "dev": "nodemon server.js",
@@ -12,7 +12,8 @@
     "lint": "eslint .",
     "seed": "node scripts/seedDatabase.js",
     "build": "echo 'No build step required'",
-    "vercel-build": "echo 'Build step completed'"
+    "vercel-build": "echo 'Build step completed'",
+    "vercel": "node vercel-server.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
