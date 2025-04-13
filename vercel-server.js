@@ -54,6 +54,26 @@ try {
     });
   });
 
+  // Add root route handler
+  vercelApp.get('/', (req, res) => {
+    res.json({
+      message: 'GHK Tess API Server',
+      status: 'running',
+      environment: process.env.NODE_ENV,
+      timestamp: new Date().toISOString()
+    });
+  });
+
+  // Add API status endpoint
+  vercelApp.get('/api/status', (req, res) => {
+    res.json({
+      message: 'API is running',
+      status: 'ok',
+      environment: process.env.NODE_ENV,
+      timestamp: new Date().toISOString()
+    });
+  });
+
   // Add debug endpoint
   vercelApp.get('/api/cors-debug', (req, res) => {
     res.json({
