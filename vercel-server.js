@@ -21,7 +21,9 @@ const corsOptions = {
       callback(null, true);
     } else {
       console.log('Blocked by CORS:', origin);
-      callback(new Error('Not allowed by CORS'));
+      // Untuk debugging, izinkan semua origin sementara
+      callback(null, true);
+      // callback(new Error('Not allowed by CORS'));
     }
   },
   credentials: true,
