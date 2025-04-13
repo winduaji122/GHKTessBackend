@@ -76,8 +76,12 @@ const corsOptions = {
   origin: (origin, callback) => {
     const allowedOrigins = [
       process.env.FRONTEND_URL,
+      'https://ghk-tess.vercel.app',
       'http://localhost:5173'
     ];
+
+    console.log('CORS request from origin:', origin);
+    console.log('Allowed origins:', allowedOrigins);
 
     // Allow requests with no origin (like mobile apps or curl requests)
     if (!origin || allowedOrigins.indexOf(origin) !== -1) {
@@ -385,7 +389,13 @@ app.get('/api/csrf-token', csrfProtection, (req, res) => {
 });
 
 app.get('/api/test', (req, res) => {
-  res.json({ message: 'Server is working' });
+  res.json({
+    message: 'Server is working',
+    environment: process.env.NODE_ENV,
+    frontend_url: process.env.FRONTEND_URL,
+    base_url: process.env.BASE_URL,
+    timestamp: new Date().toISOString()
+  });
 });
 
 app.get('/api/check-cookies', (req, res) => {

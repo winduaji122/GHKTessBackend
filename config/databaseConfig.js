@@ -5,18 +5,27 @@ const { logger } = require('../utils/logger');
 const { v4: uuidv4 } = require('uuid');
 
 // MySQL configuration
-const pool = mysql.createPool({
+const dbConfig = {
   host: process.env.DB_HOST,
   user: process.env.DB_USER,
   password: process.env.DB_PASSWORD,
   database: process.env.DB_NAME,
   waitForConnections: true,
-  connectionLimit: 15,
-  idleTimeout: 60000,
+  connectionLimit: process.env.NODE_ENV === 'production' ? 5 : 15, // Lebih sedikit koneksi di production untuk serverless
+  idleTimeout: process.env.NODE_ENV === 'production' ? 30000 : 60000, // Timeout lebih cepat di production
   queueLimit: 0,
   enableKeepAlive: true,
   keepAliveInitialDelay: 0
-});
+};
+
+// Tambahkan SSL jika diperlukan
+if (process.env.DB_SSL === 'true') {
+  dbConfig.ssl = {
+    rejectUnauthorized: true
+  };
+}
+
+const pool = mysql.createPool(dbConfig);
 
 pool.on('acquire', function (connection) {
   logger.info(`Connection ${connection.threadId} acquired`);
