@@ -41,26 +41,35 @@ pool.on('enqueue', function () {
 
 // Redis configuration - conditionally create based on environment
 let redis;
+let inMemoryCache = {};
 
 if (process.env.REDIS_ENABLED !== 'false') {
-  redis = new Redis({
-    host: process.env.REDIS_HOST || 'localhost',
-    port: process.env.REDIS_PORT || 6379,
-    maxRetriesPerRequest: null,
-    commandTimeout: 5000,
+  try {
+    redis = new Redis({
+      host: process.env.REDIS_HOST || 'localhost',
+      port: process.env.REDIS_PORT || 6379,
+      maxRetriesPerRequest: null,
+      commandTimeout: 5000,
     retryStrategy(times) {
       const delay = Math.min(times * 50, 2000);
       return delay;
     },
   });
 
-  redis.on('error', (err) => {
-    logger.error('Redis error:', err);
-  });
-} else {
-  // Create a simple in-memory cache as a fallback
+    redis.on('error', (err) => {
+      logger.error('Redis error:', err);
+    });
+  } catch (error) {
+    logger.error('Failed to initialize Redis:', error);
+    // Fallback to in-memory cache if Redis initialization fails
+    redis = null;
+  }
+}
+
+// If Redis is disabled or failed to initialize, use in-memory cache
+if (!redis) {
   logger.info('Redis disabled, using in-memory cache');
-  const memoryCache = {};
+  const memoryCache = inMemoryCache;
   redis = {
     setex: async (key, expires, value) => {
       memoryCache[key] = {
@@ -402,11 +411,23 @@ pool.on('error', (err) => {
 });
 
 function validateEnv() {
-  const requiredEnvVars = ['DB_HOST', 'DB_USER', 'DB_PASSWORD', 'DB_NAME', 'REDIS_HOST', 'REDIS_PORT'];
+  // Variabel lingkungan yang selalu diperlukan
+  const requiredEnvVars = ['DB_HOST', 'DB_USER', 'DB_PASSWORD', 'DB_NAME'];
+
+  // Tambahkan variabel Redis jika Redis diaktifkan
+  if (process.env.REDIS_ENABLED !== 'false') {
+    requiredEnvVars.push('REDIS_HOST', 'REDIS_PORT');
+  }
+
   for (const envVar of requiredEnvVars) {
     if (!process.env[envVar]) {
       logger.error(`Error: Environment variable ${envVar} is not set.`);
-      process.exit(1);
+      // Di Vercel, jangan exit process karena akan menyebabkan deployment gagal
+      if (process.env.NODE_ENV !== 'production') {
+        process.exit(1);
+      } else {
+        logger.error(`Running without ${envVar} in production mode. This may cause issues.`);
+      }
     }
   }
 }
@@ -513,8 +534,10 @@ async function verifyUserToken(userId, token, type = 'refresh') {
 
 async function setCache(key, data, expires = 300) {
   try {
-    await redis.setex(key, expires, JSON.stringify(data));
-    logger.info(`Cache set for key: ${key}`);
+    if (redis) {
+      await redis.setex(key, expires, JSON.stringify(data));
+      logger.info(`Cache set for key: ${key}`);
+    }
   } catch (error) {
     logger.error('Error setting cache:', error);
   }
@@ -522,8 +545,11 @@ async function setCache(key, data, expires = 300) {
 
 async function getCache(key) {
   try {
-    const data = await redis.get(key);
-    return data ? JSON.parse(data) : null;
+    if (redis) {
+      const data = await redis.get(key);
+      return data ? JSON.parse(data) : null;
+    }
+    return null;
   } catch (error) {
     logger.error('Error getting cache:', error);
     return null;
@@ -532,8 +558,10 @@ async function getCache(key) {
 
 async function deleteCache(key) {
   try {
-    await redis.del(key);
-    logger.info(`Cache deleted for key: ${key}`);
+    if (redis) {
+      await redis.del(key);
+      logger.info(`Cache deleted for key: ${key}`);
+    }
   } catch (error) {
     logger.error('Error deleting cache:', error);
   }
@@ -541,10 +569,12 @@ async function deleteCache(key) {
 
 async function clearCachePattern(pattern) {
   try {
-    const keys = await redis.keys(pattern);
-    if (keys.length > 0) {
-      await redis.del(keys);
-      logger.info(`Cache cleared for pattern: ${pattern}`);
+    if (redis && typeof redis.keys === 'function') {
+      const keys = await redis.keys(pattern);
+      if (keys.length > 0) {
+        await redis.del(keys);
+        logger.info(`Cache cleared for pattern: ${pattern}`);
+      }
     }
   } catch (error) {
     logger.error('Error clearing cache pattern:', error);
