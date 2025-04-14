@@ -171,10 +171,7 @@ app.use((req, res, next) => {
   }
 });
 
-// Rate limiter in production
-if (isProduction) {
-  app.use(globalLimiter);
-}
+// Rate limiter sekarang diimplementasikan di utils/rateLimiter.js dan digunakan di routes
 
 // Cookie configuration yang konsisten
 const COOKIE_CONFIG = {
