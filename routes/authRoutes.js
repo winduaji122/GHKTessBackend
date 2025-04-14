@@ -141,7 +141,9 @@ router.post('/register', authLimiter, validateRegistration, authController.regis
 // CSRF protection dinonaktifkan sementara untuk debugging
 router.post('/login', loginRateLimiterMiddleware, /* csrfProtection, */ validateLogin, authController.login);
 
+// Mendukung baik POST maupun GET untuk refresh token
 router.post('/refresh-token', authController.refreshToken);
+router.get('/refresh-token', authController.refreshToken);
 router.post('/google-login', authLimiter, authController.googleLogin);
 router.get('/verify/:token', authController.verifyEmail);
 router.post('/forgot-password', emailLimiter, validateForgotPassword, authController.forgotPassword);
