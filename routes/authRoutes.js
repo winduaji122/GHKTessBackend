@@ -64,10 +64,22 @@ const { executeQuery } = require('../config/databaseConfig');
 // Rate Limiters dengan konfigurasi yang lebih ketat
 const authLimiter = rateLimit({
   windowMs: 10 * 60 * 1000, // 10 menit
-  max: 5,
+  max: 20, // Meningkatkan batas untuk auth
   message: {
     code: 'RATE_LIMIT_EXCEEDED',
     message: 'Terlalu banyak percobaan, silakan coba lagi nanti.'
+  },
+  standardHeaders: true,
+  legacyHeaders: false
+});
+
+// Rate Limiter khusus untuk CSRF token dengan batas yang lebih tinggi
+const csrfLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000, // 10 menit
+  max: 100, // Batas yang jauh lebih tinggi untuk CSRF token
+  message: {
+    code: 'RATE_LIMIT_EXCEEDED',
+    message: 'Terlalu banyak permintaan token, silakan coba lagi nanti.'
   },
   standardHeaders: true,
   legacyHeaders: false
@@ -99,7 +111,7 @@ router.post('/google-login', authLimiter, authController.googleLogin);
 router.get('/verify/:token', authController.verifyEmail);
 router.post('/forgot-password', emailLimiter, validateForgotPassword, authController.forgotPassword);
 router.post('/reset-password', authLimiter, validatePasswordReset, authController.resetPassword);
-router.get('/csrf-token', csrfProtection, authController.getCsrfToken);
+router.get('/csrf-token', csrfLimiter, csrfProtection, authController.getCsrfToken);
 
 // Global middleware untuk semua route di bawah
 router.use((req, res, next) => {

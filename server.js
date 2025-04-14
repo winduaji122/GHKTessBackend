@@ -33,7 +33,7 @@ const session = require('express-session');
 const { sendEmail } = require('./utils/emailService');
 const { verifyToken, isAuthenticated } = require('./middleware/authMiddleware');
 const { redis, pool, executeQuery } = require('./config/databaseConfig');
-const rateLimiterMiddleware = require('./utils/rateLimiter');
+const { rateLimiterMiddleware, csrfRateLimiterMiddleware } = require('./utils/rateLimiter');
 const { logger } = require('./utils/logger');
 const { AppError, handleError } = require('./utils/errorHandler');
 const User = require('./models/User');
@@ -67,7 +67,11 @@ const createRateLimiter = (windowMs, max) => rateLimit({
   message: 'Terlalu banyak permintaan, silakan coba lagi nanti.'
 });
 
-const authLimiter = createRateLimiter(15 * 60 * 1000, 100);
+// Buat rate limiter yang lebih longgar untuk endpoint auth
+const authLimiter = createRateLimiter(15 * 60 * 1000, 500);
+
+// Buat rate limiter khusus untuk endpoint CSRF token dengan batas yang lebih tinggi
+const csrfLimiter = createRateLimiter(15 * 60 * 1000, 1000);
 const globalLimiter = createRateLimiter(15 * 60 * 1000, 1000);
 
 // Basic middleware
@@ -406,9 +410,16 @@ app.use('/api/upload', uploadRoutes);
 app.use('/api/carousel', carouselRoutes);
 
 // Utility routes
-app.get('/api/csrf-token', csrfProtection, (req, res) => {
-  res.json({ csrfToken: req.csrfToken() });
-});
+// Endpoint CSRF token dengan rate limiter yang lebih longgar
+app.get('/api/csrf-token',
+  applyProductionMiddleware(csrfLimiter), // Gunakan rate limiter khusus untuk CSRF
+  csrfRateLimiterMiddleware, // Gunakan rate limiter Redis khusus untuk CSRF
+  csrfProtection,
+  (req, res) => {
+    logger.info('CSRF token requested');
+    res.json({ csrfToken: req.csrfToken() });
+  }
+);
 
 app.get('/api/test', (req, res) => {
   res.json({
