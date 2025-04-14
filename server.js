@@ -51,6 +51,10 @@ const carouselRoutes = require('./routes/carouselRoutes');
 
 const app = express();
 
+// Enable trust proxy for Vercel environment
+app.set('trust proxy', 1);
+console.log('Trust proxy enabled for Express');
+
 // Environment variables
 const isProduction = process.env.NODE_ENV === 'production';
 const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';

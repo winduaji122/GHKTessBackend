@@ -21,8 +21,10 @@ const dbConfig = {
 // Tambahkan SSL jika diperlukan
 if (process.env.DB_SSL === 'true') {
   dbConfig.ssl = {
-    rejectUnauthorized: true
+    // Untuk Clever Cloud, kita perlu menerima sertifikat self-signed
+    rejectUnauthorized: false
   };
+  console.log('SSL enabled for database connection with rejectUnauthorized: false');
 }
 
 const pool = mysql.createPool(dbConfig);
