@@ -365,7 +365,7 @@ app.get('/api/debug/cors', (req, res) => {
 });
 
 app.use('/api/labels',
-  applyProductionMiddleware(authLimiter),
+  // Rate limiter dihapus untuk menghindari tumpang tindih
   verifyToken,
   labelsRouter
 );
