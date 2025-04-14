@@ -573,6 +573,27 @@ app.use((err, req, res, next) => {
         code: 'UPLOAD_ERROR',
         status: 400
       }
+    },
+    // Tambahkan penanganan error untuk koneksi database
+    ER_USER_LIMIT_REACHED: {
+      message: 'Terlalu banyak koneksi database, coba lagi nanti',
+      code: 'DB_CONNECTION_LIMIT',
+      status: 503
+    },
+    ECONNREFUSED: {
+      message: 'Tidak dapat terhubung ke database, coba lagi nanti',
+      code: 'DB_CONNECTION_REFUSED',
+      status: 503
+    },
+    ETIMEDOUT: {
+      message: 'Koneksi database timeout, coba lagi nanti',
+      code: 'DB_CONNECTION_TIMEOUT',
+      status: 503
+    },
+    PROTOCOL_CONNECTION_LOST: {
+      message: 'Koneksi database terputus, coba lagi nanti',
+      code: 'DB_CONNECTION_LOST',
+      status: 503
     }
   };
 
@@ -715,10 +736,35 @@ process.on('uncaughtException', (error) => {
   process.emit('SIGTERM');
 });
 
-// PERBAIKAN 3: Tambahkan middleware untuk debugging routes
+// Tambahkan middleware untuk debugging routes
 app.use((req, res, next) => {
-  console.log(`${req.method} ${req.originalUrl}`);
+  logger.info(`${req.method} ${req.originalUrl}`, { service: 'http-service' });
   next();
+});
+
+// Tambahkan endpoint fallback untuk menangani error koneksi database
+app.get('/api/health', (req, res) => {
+  res.json({
+    status: 'ok',
+    timestamp: new Date().toISOString(),
+    environment: process.env.NODE_ENV,
+    version: '1.0.0'
+  });
+});
+
+// Tambahkan endpoint fallback untuk data posts jika database tidak tersedia
+app.get('/api/posts/fallback', (req, res) => {
+  res.json({
+    success: true,
+    message: 'Fallback data returned due to database connection issues',
+    data: [],
+    pagination: {
+      currentPage: 1,
+      totalPages: 0,
+      totalItems: 0,
+      limit: 10
+    }
+  });
 });
 
 // Add database connection test endpoint

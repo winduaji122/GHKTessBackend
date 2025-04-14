@@ -10,14 +10,15 @@ const dbConfig = {
   user: process.env.DB_USER,
   password: process.env.DB_PASSWORD,
   database: process.env.DB_NAME,
-  waitForConnections: true,
-  connectionLimit: process.env.NODE_ENV === 'production' ? 2 : 10, // Batasi koneksi di production untuk Clever Cloud (max 5)
-  idleTimeout: process.env.NODE_ENV === 'production' ? 5000 : 60000, // Timeout lebih cepat di production
+  waitForConnections: false, // Jangan tunggu koneksi, langsung error jika tidak tersedia
+  connectionLimit: process.env.NODE_ENV === 'production' ? 1 : 10, // Batasi koneksi di production untuk Clever Cloud (max 5)
+  idleTimeout: process.env.NODE_ENV === 'production' ? 3000 : 60000, // Timeout lebih cepat di production
   queueLimit: 0, // Tidak ada antrian, langsung error jika koneksi penuh
   enableKeepAlive: false, // Nonaktifkan keepalive di serverless
   keepAliveInitialDelay: 0,
   multipleStatements: false, // Nonaktifkan multiple statements untuk keamanan
-  connectTimeout: 10000 // Timeout koneksi 10 detik
+  connectTimeout: 5000, // Timeout koneksi 5 detik
+  acquireTimeout: 4000 // Timeout untuk mendapatkan koneksi dari pool
 };
 
 // Tambahkan SSL jika diperlukan
@@ -524,16 +525,17 @@ async function testConnections() {
   }
 }
 
-// Run connection tests when the application starts
-testConnections();
+// Nonaktifkan pengujian koneksi otomatis untuk mengurangi koneksi saat startup
+// testConnections();
 
-// Event listeners for MySQL pool
-pool.on('connection', (connection) => logger.info('New MySQL connection established'));
-pool.on('acquire', (connection) => logger.info('MySQL connection %d acquired', connection.threadId));
-pool.on('release', (connection) => logger.info('MySQL connection %d released', connection.threadId));
+// Hanya tambahkan event listener untuk error penting
 pool.on('error', (err) => {
-  logger.error('Unexpected error on idle MySQL client', err);
-  testConnections();
+  logger.error('Unexpected error on idle MySQL client', {
+    error: err.message,
+    code: err.code,
+    service: 'database-service'
+  });
+  // Jangan panggil testConnections() untuk menghindari loop error
 });
 
 function validateEnv() {
