@@ -33,7 +33,7 @@ const session = require('express-session');
 const { sendEmail } = require('./utils/emailService');
 const { verifyToken, isAuthenticated } = require('./middleware/authMiddleware');
 const { redis, pool, executeQuery } = require('./config/databaseConfig');
-const { rateLimiterMiddleware, csrfRateLimiterMiddleware } = require('./utils/rateLimiter');
+// Rate limiter diimplementasikan di utils/rateLimiter.js dan digunakan di routes
 const { logger } = require('./utils/logger');
 const { AppError, handleError } = require('./utils/errorHandler');
 const User = require('./models/User');
@@ -60,19 +60,8 @@ const isProduction = process.env.NODE_ENV === 'production';
 const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
 const PORT = process.env.PORT || 5000;
 
-// Rate limiting setup
-const createRateLimiter = (windowMs, max) => rateLimit({
-  windowMs: windowMs,
-  max: isProduction ? max : 1000,
-  message: 'Terlalu banyak permintaan, silakan coba lagi nanti.'
-});
-
-// Buat rate limiter yang lebih longgar untuk endpoint auth
-const authLimiter = createRateLimiter(15 * 60 * 1000, 500);
-
-// Buat rate limiter khusus untuk endpoint CSRF token dengan batas yang lebih tinggi
-const csrfLimiter = createRateLimiter(15 * 60 * 1000, 1000);
-const globalLimiter = createRateLimiter(15 * 60 * 1000, 1000);
+// CATATAN: Rate limiter telah dipindahkan ke utils/rateLimiter.js
+// Tidak menggunakan rate limiter global untuk menghindari tumpang tindih
 
 // Basic middleware
 app.use(express.json({ limit: '20mb' }));
@@ -318,13 +307,8 @@ app.use((req, res, next) => {
   next();
 });
 
-// Production middleware helper
-const applyProductionMiddleware = (middleware) => (req, res, next) => {
-  if (isProduction) {
-    return middleware(req, res, next);
-  }
-  next();
-};
+// Production middleware helper (tidak digunakan lagi)
+// Rate limiter sekarang diimplementasikan di utils/rateLimiter.js dan digunakan di routes
 
 // Route untuk mengecek keberadaan file
 app.get('/api/check-file/:filename', (req, res) => {
@@ -356,8 +340,7 @@ app.get('/api/check-file/:filename', (req, res) => {
 
 // API Routes
 app.use('/api/auth',
-  applyProductionMiddleware(authLimiter),
-  applyProductionMiddleware(rateLimiterMiddleware),
+  // Tidak menggunakan rate limiter global di sini, karena sudah ada di authRoutes.js
   (req, res, next) => {
     // Log auth requests
     logger.info('Auth request:', {

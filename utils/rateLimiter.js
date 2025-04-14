@@ -8,7 +8,23 @@ const WHITELIST_IPS = [
   'localhost',
   '::1',
   // Tambahkan IP Anda di sini jika diperlukan
+  // Tambahkan IP publik Anda untuk testing
+  '0.0.0.0', // Placeholder untuk semua IP (hanya untuk debugging)
 ];
+
+// Tambahkan IP dari environment variable jika ada
+if (process.env.WHITELIST_IPS) {
+  try {
+    const additionalIPs = process.env.WHITELIST_IPS.split(',').map(ip => ip.trim());
+    WHITELIST_IPS.push(...additionalIPs);
+    console.log('Added whitelist IPs from environment:', additionalIPs);
+  } catch (error) {
+    console.error('Error parsing WHITELIST_IPS environment variable:', error);
+  }
+}
+
+// Log whitelist IPs untuk debugging
+console.log('Current whitelist IPs:', WHITELIST_IPS);
 
 // Konfigurasi rate limiter berdasarkan environment
 const isProduction = process.env.NODE_ENV === 'production';
@@ -31,9 +47,9 @@ const RATE_LIMIT_CONFIG = {
       blockDuration: 30  // blokir 30 detik jika melebihi
     },
     login: {
-      points: 300,       // 300 permintaan login
+      points: 500,       // 500 permintaan login
       duration: 60 * 15, // per 15 menit
-      blockDuration: 15  // blokir 15 detik jika melebihi
+      blockDuration: 5   // blokir 5 detik jika melebihi
     }
   },
   // Konfigurasi untuk development (lebih longgar)
@@ -54,7 +70,7 @@ const RATE_LIMIT_CONFIG = {
       blockDuration: 1   // blokir 1 detik jika melebihi
     },
     login: {
-      points: 1000,      // 1000 permintaan login
+      points: 5000,      // 5000 permintaan login
       duration: 60,      // per 1 menit
       blockDuration: 1   // blokir 1 detik jika melebihi
     }
@@ -102,9 +118,37 @@ const loginRateLimiter = new RateLimiterRedis({
 
 // Fungsi untuk memeriksa apakah IP ada dalam whitelist
 const isWhitelisted = (ip) => {
-  return WHITELIST_IPS.includes(ip) ||
-         process.env.NODE_ENV === 'development' ||
-         process.env.DISABLE_RATE_LIMIT === 'true';
+  // Log IP untuk debugging
+  logger.info(`Checking IP whitelist for: ${ip}`);
+
+  // Jika DISABLE_RATE_LIMIT=true, selalu return true
+  if (process.env.DISABLE_RATE_LIMIT === 'true') {
+    logger.info('Rate limiting disabled via environment variable');
+    return true;
+  }
+
+  // Jika dalam mode development, selalu return true
+  if (process.env.NODE_ENV === 'development') {
+    logger.info('Rate limiting disabled in development mode');
+    return true;
+  }
+
+  // Cek apakah IP ada dalam whitelist
+  const isInWhitelist = WHITELIST_IPS.some(whitelistedIp => {
+    // Exact match
+    if (ip === whitelistedIp) return true;
+
+    // CIDR match (future implementation)
+    // if (isCidrMatch(ip, whitelistedIp)) return true;
+
+    return false;
+  });
+
+  if (isInWhitelist) {
+    logger.info(`IP ${ip} is in whitelist`);
+  }
+
+  return isInWhitelist;
 };
 
 // Middleware untuk rate limiter umum
@@ -175,24 +219,41 @@ const authRateLimiterMiddleware = (req, res, next) => {
 
 // Middleware untuk rate limiter login
 const loginRateLimiterMiddleware = (req, res, next) => {
+  // Log untuk debugging
+  logger.info(`Login attempt from IP: ${req.ip}, User-Agent: ${req.headers['user-agent']}`);
+
   // Skip rate limiting untuk IP yang di-whitelist
   if (isWhitelisted(req.ip)) {
+    logger.info(`IP ${req.ip} is whitelisted, skipping rate limit for login`);
     return next();
   }
 
   // Gunakan kombinasi IP + user agent untuk mengurangi false positive
-  const key = req.ip + '-' + (req.headers['user-agent'] || 'unknown').substring(0, 20);
+  // Tambahkan email sebagai bagian dari key untuk membedakan antar user
+  const email = req.body?.email || 'unknown';
+  const userAgent = (req.headers['user-agent'] || 'unknown').substring(0, 20);
+  const key = `login-${req.ip}-${userAgent}-${email}`;
 
+  logger.info(`Login rate limit key: ${key}`);
+
+  // Coba consume point dari rate limiter
   loginRateLimiter.consume(key)
     .then(() => {
+      logger.info(`Login rate limit passed for key: ${key}`);
       next();
     })
     .catch((rejRes) => {
-      logger.warn(`Login rate limit exceeded for IP: ${req.ip}`);
-      res.set('Retry-After', String(Math.round(rejRes.msBeforeNext / 1000) || 1));
+      logger.warn(`Login rate limit exceeded for IP: ${req.ip}, key: ${key}`);
+      logger.warn(`Retry after: ${Math.ceil(rejRes.msBeforeNext / 1000)} seconds`);
+
+      // Set header Retry-After
+      const retryAfter = Math.ceil(rejRes.msBeforeNext / 1000) || 1;
+      res.set('Retry-After', String(retryAfter));
+
+      // Kirim respons 429 dengan informasi retry
       res.status(429).json({
         message: 'Too Many Login Attempts',
-        retryAfter: Math.ceil(rejRes.msBeforeNext / 1000),
+        retryAfter: retryAfter,
         success: false
       });
     });
