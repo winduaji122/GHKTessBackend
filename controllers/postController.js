@@ -92,22 +92,15 @@ exports.getAllPosts = async (req, res) => {
         orderBy = 'p.created_at DESC';
     }
 
+    // Gunakan query yang lebih sederhana untuk mengurangi beban
     const query = `
-      SELECT DISTINCT
-        p.*,
-        u.name as author_name,
-        GROUP_CONCAT(
-          DISTINCT JSON_OBJECT(
-            'id', CAST(ul.id AS UNSIGNED),
-            'label', ul.label
-          )
-        ) as labels
+      SELECT
+        p.id, p.title, p.slug, p.content, p.image, p.status,
+        p.created_at, p.updated_at, p.is_featured, p.is_spotlight,
+        p.author_id, u.name as author_name
       FROM posts p
       LEFT JOIN users u ON p.author_id = u.id
-      LEFT JOIN post_labels pl ON p.id = pl.post_id
-      LEFT JOIN unique_labels ul ON pl.label_id = ul.id
       ${whereConditions.length ? 'WHERE ' + whereConditions.join(' AND ') : ''}
-      GROUP BY p.id, u.name
       ORDER BY ${orderBy}
       LIMIT ? OFFSET ?
     `;
@@ -115,26 +108,86 @@ exports.getAllPosts = async (req, res) => {
     const offset = (parseInt(page) - 1) * parseInt(limit);
     const queryParams = [...params, parseInt(limit), offset];
 
-    // Count total records for pagination
+    // Count total records for pagination - gunakan query yang lebih sederhana
     const countQuery = `
-      SELECT COUNT(DISTINCT p.id) as total
+      SELECT COUNT(*) as total
       FROM posts p
-      LEFT JOIN post_labels pl ON p.id = pl.post_id
       ${whereConditions.length ? 'WHERE ' + whereConditions.join(' AND ') : ''}
     `;
 
     // Gunakan koneksi langsung dari db
-    const connection = await db.getConnection();
+    let connection;
     try {
+      // Tambahkan timeout untuk mendapatkan koneksi
+      const getConnectionPromise = db.getConnection();
+      const timeoutPromise = new Promise((_, reject) => {
+        setTimeout(() => reject(new Error('Connection acquisition timeout')), 5000);
+      });
+
+      try {
+        connection = await Promise.race([getConnectionPromise, timeoutPromise]);
+      } catch (connError) {
+        logger.error('Failed to acquire connection in getAllPosts:', {
+          error: connError.message,
+          stack: connError.stack
+        });
+        return res.status(500).json({
+          success: false,
+          message: 'Tidak dapat terhubung ke database',
+          error: 'Database connection error'
+        });
+      }
+
+      // Eksekusi query utama
       const [postsResult] = await connection.query(query, queryParams);
       const [count] = await connection.query(countQuery, params);
 
+      // Jika tidak ada hasil, kembalikan array kosong
+      if (postsResult.length === 0) {
+        return res.json({
+          success: true,
+          data: [],
+          pagination: {
+            currentPage: parseInt(page),
+            totalPages: 0,
+            totalItems: 0,
+            limit: parseInt(limit)
+          }
+        });
+      }
+
+      // Ambil label secara terpisah untuk mengurangi kompleksitas query
+      const postIds = postsResult.map(post => post.id);
+      let labels = [];
+
+      if (postIds.length > 0) {
+        const [labelRows] = await connection.query(`
+          SELECT pl.post_id, ul.id, ul.label
+          FROM post_labels pl
+          JOIN unique_labels ul ON pl.label_id = ul.id
+          WHERE pl.post_id IN (?)
+        `, [postIds]);
+
+        labels = labelRows;
+      }
+
+      // Format response dengan label yang diambil secara terpisah
+      const formattedPosts = postsResult.map(post => {
+        const postLabels = labels
+          .filter(label => label.post_id === post.id)
+          .map(label => ({ id: label.id, label: label.label }));
+
+        return {
+          ...post,
+          is_spotlight: Boolean(post.is_spotlight),
+          is_featured: Boolean(post.is_featured),
+          labels: postLabels || []
+        };
+      });
+
       res.json({
         success: true,
-        data: postsResult.map(post => ({
-          ...post,
-          labels: post.labels ? JSON.parse(`[${post.labels}]`).filter(Boolean) : []
-        })),
+        data: formattedPosts,
         pagination: {
           currentPage: parseInt(page),
           totalPages: Math.ceil(count[0].total / parseInt(limit)),
