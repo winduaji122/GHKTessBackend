@@ -138,7 +138,8 @@ const csrfProtection = csrf({
 router.post('/register', authLimiter, validateRegistration, authController.register);
 
 // Gunakan loginRateLimiterMiddleware khusus untuk endpoint login
-router.post('/login', loginRateLimiterMiddleware, csrfProtection, validateLogin, authController.login);
+// CSRF protection dinonaktifkan sementara untuk debugging
+router.post('/login', loginRateLimiterMiddleware, /* csrfProtection, */ validateLogin, authController.login);
 
 router.post('/refresh-token', authController.refreshToken);
 router.post('/google-login', authLimiter, authController.googleLogin);
