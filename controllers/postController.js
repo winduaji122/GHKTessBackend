@@ -669,102 +669,111 @@ exports.deletePost = [isAdminOrWriter, async (req, res) => {
 }];
 
 exports.getFeaturedPosts = async (req, res) => {
+  let connection;
   try {
     logger.info('Fetching featured posts');
-    const limit = parseInt(req.query.limit) || 10;
+    // Batasi limit untuk mengurangi beban server
+    const requestedLimit = parseInt(req.query.limit) || 10;
+    const limit = Math.min(requestedLimit, 10); // Maksimum 10 post
     const isAdmin = req.query.admin === 'true';
 
     // Gunakan koneksi langsung dari db
-    const connection = await db.getConnection();
-    try {
-      // Query untuk mengambil featured posts
-      let query = `
-        SELECT
-          p.*,
-          u.name as author_name,
-          u.email as author_email
-        FROM posts p
-        LEFT JOIN users u ON p.author_id = u.id
-        WHERE p.is_featured = 1
-          AND p.deleted_at IS NULL
-      `;
+    connection = await db.getConnection();
 
-      // Jika bukan admin, tambahkan filter status published
-      if (!isAdmin) {
-        query += ` AND p.status = 'published'`;
-      }
+    // Query untuk mengambil featured posts - gunakan query yang lebih sederhana
+    let query = `
+      SELECT
+        p.id, p.title, p.slug, p.content, p.image, p.status,
+        p.created_at, p.updated_at, p.is_featured, p.is_spotlight,
+        p.author_id, u.name as author_name, u.email as author_email
+      FROM posts p
+      LEFT JOIN users u ON p.author_id = u.id
+      WHERE p.is_featured = 1
+        AND p.deleted_at IS NULL
+    `;
 
-      query += ` ORDER BY p.created_at DESC LIMIT ?`;
+    // Jika bukan admin, tambahkan filter status published
+    if (!isAdmin) {
+      query += ` AND p.status = 'published'`;
+    }
 
-      const [posts] = await connection.query(query, [limit]);
+    query += ` ORDER BY p.created_at DESC LIMIT ?`;
 
-      // Log untuk debugging
-      logger.info(`Found ${posts.length} featured posts with IDs: ${posts.map(p => p.id).join(', ')}`);
+    const [posts] = await connection.query(query, [limit]);
 
-      // Jika tidak ada featured posts
-      if (posts.length === 0) {
-        return res.json({
-          success: true,
-          data: [],
-          message: 'No featured posts found'
-        });
-      }
+    // Log untuk debugging
+    logger.info(`Found ${posts.length} featured posts`);
 
-      // Ambil label untuk semua post yang ditemukan
-      const formattedPosts = [];
-
-      for (const post of posts) {
-        // Query terpisah untuk mendapatkan label
-        const [labelRows] = await connection.query(`
-          SELECT ul.id, ul.label
-          FROM post_labels pl
-          JOIN unique_labels ul ON pl.label_id = ul.id
-          WHERE pl.post_id = ?
-        `, [post.id]);
-
-        formattedPosts.push({
-          ...post,
-          image: post.image ? formatImageUrl(post.image) : null,
-          thumbnail: post.thumbnail ? formatImageUrl(post.thumbnail) : null,
-          labels: labelRows || [],
-          is_featured: Boolean(post.is_featured),
-          is_spotlight: Boolean(post.is_spotlight),
-          author: {
-            name: post.author_name,
-            email: post.author_email
-          }
-        });
-      }
-
-      // Jika ada featured post
-      if (posts.length > 0) {
-        logger.info(`Featured post details: ID=${posts[0].id}, Title="${posts[0].title}", Status=${posts[0].status}`);
-      }
-
+    // Jika tidak ada featured posts
+    if (posts.length === 0) {
       return res.json({
         success: true,
-        data: formattedPosts,
-        message: 'Featured posts retrieved successfully'
+        data: [],
+        message: 'No featured posts found'
       });
-    } catch (error) {
-      logger.error('Database error in getFeaturedPosts:', {
-        error: error.message,
-        stack: error.stack
-      });
-      throw error;
-    } finally {
-      connection.release();
     }
+
+    // Ambil label secara terpisah untuk mengurangi kompleksitas query
+    const postIds = posts.map(post => post.id);
+    let labels = [];
+
+    if (postIds.length > 0) {
+      const [labelRows] = await connection.query(`
+        SELECT pl.post_id, ul.id, ul.label
+        FROM post_labels pl
+        JOIN unique_labels ul ON pl.label_id = ul.id
+        WHERE pl.post_id IN (?)
+      `, [postIds]);
+
+      labels = labelRows;
+    }
+
+    // Format response dengan label yang diambil secara terpisah
+    const formattedPosts = posts.map(post => {
+      const postLabels = labels
+        .filter(label => label.post_id === post.id)
+        .map(label => ({ id: label.id, label: label.label }));
+
+      return {
+        ...post,
+        image: post.image ? formatImageUrl(post.image) : null,
+        thumbnail: post.thumbnail ? formatImageUrl(post.thumbnail) : null,
+        labels: postLabels || [],
+        is_featured: Boolean(post.is_featured),
+        is_spotlight: Boolean(post.is_spotlight),
+        author: {
+          name: post.author_name,
+          email: post.author_email
+        }
+      };
+    });
+
+    return res.json({
+      success: true,
+      data: formattedPosts,
+      message: 'Featured posts retrieved successfully'
+    });
   } catch (error) {
     logger.error('Error fetching featured posts:', {
       error: error.message,
       stack: error.stack
     });
+
     res.status(500).json({
       success: false,
-      message: 'Error fetching featured posts',
+      message: 'Terjadi kesalahan dalam mengambil featured posts',
       error: error.message
     });
+  } finally {
+    // Pastikan koneksi selalu dilepas
+    if (connection) {
+      try {
+        connection.release();
+        logger.info('Connection released in getFeaturedPosts');
+      } catch (releaseError) {
+        logger.error('Error releasing connection in getFeaturedPosts:', releaseError);
+      }
+    }
   }
 };
 

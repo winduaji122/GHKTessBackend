@@ -78,21 +78,39 @@ app.use(morgan('dev'));
 
 const corsOptions = {
   origin: (origin, callback) => {
+    // Daftar origin yang diizinkan
     const allowedOrigins = [
       process.env.FRONTEND_URL,
       'https://ghk-tess.vercel.app',
       'http://localhost:5173'
     ];
 
-    console.log('CORS request from origin:', origin);
-    console.log('Allowed origins:', allowedOrigins);
+    // Log untuk debugging
+    logger.info('CORS Request:', {
+      service: 'user-service',
+      origin,
+      method: 'PREFLIGHT',
+      path: 'CORS Check'
+    });
 
     // Allow requests with no origin (like mobile apps or curl requests)
-    if (!origin || allowedOrigins.indexOf(origin) !== -1) {
+    if (!origin) {
+      callback(null, true);
+      return;
+    }
+
+    // Izinkan semua origin di development
+    if (process.env.NODE_ENV !== 'production') {
+      callback(null, true);
+      return;
+    }
+
+    // Periksa apakah origin ada dalam daftar yang diizinkan
+    if (allowedOrigins.includes(origin)) {
       callback(null, true);
     } else {
       logger.warn('Blocked by CORS:', origin);
-      callback(new Error('Not allowed by CORS'));
+      callback(new Error(`Origin ${origin} not allowed by CORS`));
     }
   },
   credentials: true,
