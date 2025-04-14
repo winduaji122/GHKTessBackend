@@ -61,33 +61,42 @@ const emailService = require('../utils/emailService');
 const { logger } = require('../utils/logger');
 const { executeQuery } = require('../config/databaseConfig');
 
-// Rate Limiters dengan konfigurasi yang lebih ketat
+// Konfigurasi rate limiter berdasarkan environment
+const isProduction = process.env.NODE_ENV === 'production';
+
+// Rate Limiter untuk auth dengan konfigurasi yang lebih longgar
 const authLimiter = rateLimit({
-  windowMs: 10 * 60 * 1000, // 10 menit
-  max: 20, // Meningkatkan batas untuk auth
+  windowMs: 15 * 60 * 1000, // 15 menit
+  max: isProduction ? 50 : 1000, // Lebih longgar untuk auth
   message: {
     code: 'RATE_LIMIT_EXCEEDED',
     message: 'Terlalu banyak percobaan, silakan coba lagi nanti.'
   },
   standardHeaders: true,
-  legacyHeaders: false
+  legacyHeaders: false,
+  skipSuccessfulRequests: true // Hanya hitung request yang gagal
 });
 
-// Rate Limiter khusus untuk CSRF token dengan batas yang lebih tinggi
+// Rate Limiter khusus untuk CSRF token dengan batas yang sangat tinggi
 const csrfLimiter = rateLimit({
-  windowMs: 10 * 60 * 1000, // 10 menit
-  max: 100, // Batas yang jauh lebih tinggi untuk CSRF token
+  windowMs: 15 * 60 * 1000, // 15 menit
+  max: isProduction ? 200 : 5000, // Batas yang sangat tinggi untuk CSRF token
   message: {
     code: 'RATE_LIMIT_EXCEEDED',
     message: 'Terlalu banyak permintaan token, silakan coba lagi nanti.'
   },
   standardHeaders: true,
-  legacyHeaders: false
+  legacyHeaders: false,
+  skipSuccessfulRequests: true, // Hanya hitung request yang gagal
+  keyGenerator: (req) => {
+    // Gunakan IP + user agent untuk mengurangi false positive
+    return req.ip + '-' + (req.headers['user-agent'] || 'unknown');
+  }
 });
 
 const emailLimiter = rateLimit({
   windowMs: 60 * 60 * 1000, // 1 jam
-  max: 3,
+  max: 5, // Sedikit lebih longgar
   message: {
     code: 'EMAIL_LIMIT_EXCEEDED',
     message: 'Terlalu banyak permintaan email, silakan coba lagi nanti.'

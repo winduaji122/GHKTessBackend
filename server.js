@@ -410,16 +410,7 @@ app.use('/api/upload', uploadRoutes);
 app.use('/api/carousel', carouselRoutes);
 
 // Utility routes
-// Endpoint CSRF token dengan rate limiter yang lebih longgar
-app.get('/api/csrf-token',
-  applyProductionMiddleware(csrfLimiter), // Gunakan rate limiter khusus untuk CSRF
-  csrfRateLimiterMiddleware, // Gunakan rate limiter Redis khusus untuk CSRF
-  csrfProtection,
-  (req, res) => {
-    logger.info('CSRF token requested');
-    res.json({ csrfToken: req.csrfToken() });
-  }
-);
+// Endpoint CSRF token dihapus dari server.js dan dikonsolidasikan ke authRoutes.js
 
 app.get('/api/test', (req, res) => {
   res.json({

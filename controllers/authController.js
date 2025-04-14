@@ -1175,19 +1175,45 @@ exports.checkAuth = async (req, res) => {
 
 exports.getCsrfToken = (req, res) => {
   try {
-    // Set header cache
-    res.set('Cache-Control', 'private, max-age=300'); // Cache 5 menit
+    // Tingkatkan durasi cache menjadi 60 menit
+    const cacheDuration = 60 * 60; // 60 menit dalam detik
+    res.set('Cache-Control', `private, max-age=${cacheDuration}`);
 
-    // Generate token
+    // Cek apakah ada token yang sudah ada di cookie
+    const existingToken = req.cookies._csrf;
+
+    // Generate token baru jika tidak ada yang valid
     const token = req.csrfToken();
+
+    // Log untuk debugging (kurangi log untuk mengurangi beban)
+    if (!existingToken) {
+      logger.info('New CSRF token generated', {
+        ip: req.ip,
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    // Set cookie dengan durasi yang lebih lama
+    res.cookie('_csrf', token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+      maxAge: cacheDuration * 1000,
+      path: '/'
+    });
 
     res.json({
       csrfToken: token,
-      expires: new Date(Date.now() + 300000).toISOString() // 5 menit
+      expires: new Date(Date.now() + cacheDuration * 1000).toISOString(),
+      cacheDuration: cacheDuration
     });
   } catch (error) {
     logger.error('Error generating CSRF token:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    res.status(500).json({
+      error: 'Internal server error',
+      message: 'Gagal menghasilkan token keamanan',
+      success: false
+    });
   }
 };
 
