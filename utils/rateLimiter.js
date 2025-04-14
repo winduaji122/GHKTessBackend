@@ -222,6 +222,12 @@ const loginRateLimiterMiddleware = (req, res, next) => {
   // Log untuk debugging
   logger.info(`Login attempt from IP: ${req.ip}, User-Agent: ${req.headers['user-agent']}`);
 
+  // PENTING: Menonaktifkan rate limiter untuk login sementara
+  // Selalu izinkan permintaan login tanpa rate limiting
+  logger.info('Rate limiting for login is DISABLED');
+  return next();
+
+  /* KODE ASLI DINONAKTIFKAN
   // Skip rate limiting untuk IP yang di-whitelist
   if (isWhitelisted(req.ip)) {
     logger.info(`IP ${req.ip} is whitelisted, skipping rate limit for login`);
@@ -257,6 +263,7 @@ const loginRateLimiterMiddleware = (req, res, next) => {
         success: false
       });
     });
+  */
 };
 
 module.exports = {
