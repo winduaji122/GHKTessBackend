@@ -114,5 +114,41 @@ app.use((req, res, next) => {
   next();
 });
 
+// Import database functions
+const { executeQuery } = require('./config/databaseConfig');
+
+// Add database test endpoint
+app.get('/api/db-test', async (req, res) => {
+  try {
+    // Uji koneksi database dengan query sederhana
+    const result = await executeQuery('SELECT 1 as test');
+
+    // Tambahkan informasi koneksi database (jangan tampilkan password)
+    const dbInfo = {
+      host: process.env.DB_HOST,
+      database: process.env.DB_NAME,
+      user: process.env.DB_USER,
+      port: process.env.DB_PORT || '3306',
+      ssl: process.env.DB_SSL === 'true' ? 'enabled' : 'disabled'
+    };
+
+    res.json({
+      success: true,
+      message: 'Koneksi database berhasil',
+      data: result,
+      connection: dbInfo,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('Error testing database:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Koneksi database gagal',
+      error: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
 // Export the app for Vercel
 module.exports = app;
