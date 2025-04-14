@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { logger } = require('../utils/logger');
 const { isAuthenticated } = require('../middleware/authMiddleware');
-const rateLimiter = require('../utils/rateLimiter');
+const { rateLimiterMiddleware } = require('../utils/rateLimiter');
 const { validateSearch } = require('../middleware/validationMiddleware');
 const { redis, executeQuery } = require('../config/databaseConfig');
 const { search } = require('../controllers/searchController');
@@ -13,10 +13,10 @@ const csrfProtection = csrf({ cookie: true });
 const jwt = require('jsonwebtoken');
 
 // Rute pencarian umum
-router.get('/', rateLimiter, validateSearch, search);
+router.get('/', rateLimiterMiddleware, validateSearch, search);
 
 // Rute untuk saran pencarian
-router.get('/suggestions', rateLimiter, validateSearch, async (req, res) => {
+router.get('/suggestions', rateLimiterMiddleware, validateSearch, async (req, res) => {
   const { q } = req.query;
   const cacheKey = `suggestions:${q}`;
 
@@ -56,8 +56,8 @@ router.get('/suggestions', rateLimiter, validateSearch, async (req, res) => {
 router.get('/advanced', async (req, res) => {
   try {
     const { q = '', page = 1, limit = 10, status, label_id, featured, sort } = req.query;
-    
-    logger.info('Advanced search request:', { 
+
+    logger.info('Advanced search request:', {
       service: 'user-service',
       query: q,
       status,
@@ -70,14 +70,14 @@ router.get('/advanced', async (req, res) => {
 
     const results = await executeQuery(async (connection) => {
       let sql = `
-        SELECT p.*, 
+        SELECT p.*,
           GROUP_CONCAT(CONCAT(ul.id, ':', ul.label)) AS labels
         FROM posts p
         LEFT JOIN post_labels pl ON p.id = pl.post_id
         LEFT JOIN unique_labels ul ON pl.label_id = ul.id
         WHERE 1=1
       `;
-      
+
       const params = [];
 
       if (q) {
@@ -133,10 +133,10 @@ router.get('/advanced', async (req, res) => {
 
   } catch (error) {
     logger.error('Error in advanced search:', error);
-    res.status(500).json({ 
+    res.status(500).json({
       success: false,
       message: 'Terjadi kesalahan dalam pencarian',
-      error: error.message 
+      error: error.message
     });
   }
 });
@@ -146,11 +146,11 @@ router.get('/labels', async (req, res) => {
   try {
     const labels = await executeQuery(async (connection) => {
       const query = `
-        SELECT id, label as name 
-        FROM unique_labels 
+        SELECT id, label as name
+        FROM unique_labels
         ORDER BY label ASC
       `;
-      
+
       const [rows] = await connection.query(query);
       return rows;
     });
@@ -158,9 +158,9 @@ router.get('/labels', async (req, res) => {
     res.json(labels);
   } catch (error) {
     logger.error('Error fetching labels:', error);
-    res.status(500).json({ 
+    res.status(500).json({
       message: 'Terjadi kesalahan saat mengambil label',
-      error: error.message 
+      error: error.message
     });
   }
 });

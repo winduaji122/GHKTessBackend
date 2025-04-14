@@ -610,4 +610,42 @@ router.use((error, req, res, next) => {
   });
 });
 
+// Debugging endpoint untuk posts
+router.get('/debug', async (req, res) => {
+  try {
+    // Ambil informasi tabel posts
+    const { executeQuery } = require('../config/databaseConfig');
+
+    // Cek struktur tabel posts
+    const tableInfo = await executeQuery('DESCRIBE posts');
+
+    // Cek jumlah post
+    const countResult = await executeQuery('SELECT COUNT(*) as total FROM posts');
+
+    // Cek post terbaru (limit 1)
+    const latestPost = await executeQuery('SELECT id, title, status, created_at FROM posts ORDER BY created_at DESC LIMIT 1');
+
+    // Cek spotlight posts
+    const spotlightCount = await executeQuery('SELECT COUNT(*) as total FROM posts WHERE is_spotlight = 1');
+
+    res.json({
+      success: true,
+      message: 'Posts debug info',
+      table_structure: tableInfo,
+      post_count: countResult[0].total,
+      latest_post: latestPost[0] || null,
+      spotlight_count: spotlightCount[0].total,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('Error debugging posts:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error debugging posts',
+      error: error.message,
+      stack: process.env.NODE_ENV === 'production' ? undefined : error.stack
+    });
+  }
+});
+
 module.exports = router;

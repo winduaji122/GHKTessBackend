@@ -117,17 +117,38 @@ app.use((req, res, next) => {
 // Import database functions
 const { executeQuery } = require('./config/databaseConfig');
 
-// Add database test endpoint
+// Add database test endpoint with better error handling
 app.get('/api/db-test', async (req, res) => {
   try {
+    console.log('Database test endpoint called');
+    console.log('Environment variables:', {
+      DB_HOST: process.env.DB_HOST ? 'Set (hidden)' : 'Not set',
+      DB_USER: process.env.DB_USER ? 'Set (hidden)' : 'Not set',
+      DB_PASSWORD: process.env.DB_PASSWORD ? 'Set (hidden)' : 'Not set',
+      DB_NAME: process.env.DB_NAME ? 'Set (hidden)' : 'Not set',
+      DB_PORT: process.env.DB_PORT || '3306',
+      DB_SSL: process.env.DB_SSL || 'false',
+      NODE_ENV: process.env.NODE_ENV
+    });
+
+    // Periksa apakah variabel lingkungan database sudah diatur
+    const requiredEnvVars = ['DB_HOST', 'DB_USER', 'DB_PASSWORD', 'DB_NAME'];
+    const missingVars = requiredEnvVars.filter(varName => !process.env[varName]);
+
+    if (missingVars.length > 0) {
+      throw new Error(`Missing required environment variables: ${missingVars.join(', ')}`);
+    }
+
     // Uji koneksi database dengan query sederhana
+    console.log('Executing database query...');
     const result = await executeQuery('SELECT 1 as test');
+    console.log('Query result:', result);
 
     // Tambahkan informasi koneksi database (jangan tampilkan password)
     const dbInfo = {
-      host: process.env.DB_HOST,
-      database: process.env.DB_NAME,
-      user: process.env.DB_USER,
+      host: process.env.DB_HOST ? `${process.env.DB_HOST.substring(0, 4)}...` : 'Not set',
+      database: process.env.DB_NAME || 'Not set',
+      user: process.env.DB_USER ? `${process.env.DB_USER.substring(0, 2)}...` : 'Not set',
       port: process.env.DB_PORT || '3306',
       ssl: process.env.DB_SSL === 'true' ? 'enabled' : 'disabled'
     };
@@ -141,13 +162,36 @@ app.get('/api/db-test', async (req, res) => {
     });
   } catch (error) {
     console.error('Error testing database:', error);
+
+    // Kirim respons error yang lebih informatif
     res.status(500).json({
       success: false,
       message: 'Koneksi database gagal',
       error: error.message,
+      stack: process.env.NODE_ENV === 'production' ? undefined : error.stack,
       timestamp: new Date().toISOString()
     });
   }
+});
+
+// Add simple database connection test endpoint
+app.get('/api/db-connection', (req, res) => {
+  // Tampilkan informasi koneksi database (jangan tampilkan password)
+  const dbInfo = {
+    host: process.env.DB_HOST ? `${process.env.DB_HOST.substring(0, 4)}...` : 'Not set',
+    database: process.env.DB_NAME || 'Not set',
+    user: process.env.DB_USER ? `${process.env.DB_USER.substring(0, 2)}...` : 'Not set',
+    port: process.env.DB_PORT || '3306',
+    ssl: process.env.DB_SSL === 'true' ? 'enabled' : 'disabled',
+    redis_enabled: process.env.REDIS_ENABLED || 'true'
+  };
+
+  res.json({
+    message: 'Database connection info',
+    connection: dbInfo,
+    env: process.env.NODE_ENV,
+    timestamp: new Date().toISOString()
+  });
 });
 
 // Export the app for Vercel
