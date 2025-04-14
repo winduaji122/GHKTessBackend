@@ -143,12 +143,29 @@ exports.getAllPosts = async (req, res) => {
         }
       });
     } catch (error) {
+      logger.error('Database error in getAllPosts:', {
+        error: error.message,
+        stack: error.stack
+      });
       throw error;
     } finally {
-      connection.release();
+      // Pastikan koneksi selalu dilepas
+      try {
+        connection.release();
+        logger.info('Connection released in getAllPosts');
+      } catch (releaseError) {
+        logger.error('Error releasing connection in getAllPosts:', releaseError);
+      }
     }
   } catch (error) {
-    logger.error('Error getting posts:', error);
+    logger.error('Error getting posts:', {
+      error: error.message,
+      code: error.code,
+      errno: error.errno,
+      sqlState: error.sqlState,
+      sqlMessage: error.sqlMessage,
+      stack: error.stack
+    });
     res.status(500).json({
       success: false,
       message: 'Terjadi kesalahan dalam mengambil data posts',
@@ -752,71 +769,87 @@ exports.getFeaturedPosts = async (req, res) => {
 };
 
 exports.getSpotlightPosts = async (req, res) => {
+  let connection;
   try {
     logger.info('Fetching spotlight posts');
 
     // Gunakan koneksi langsung dari db
-    const connection = await db.getConnection();
-    try {
-      // Query untuk mengambil spotlight posts
-      const [posts] = await connection.query(`
-        SELECT
-          p.*,
-          u.name as author_name,
-          u.email as author_email,
-          GROUP_CONCAT(
-            DISTINCT JSON_OBJECT(
-              'id', ul.id,
-              'label', ul.label
-            )
-          ) as labels
-        FROM posts p
-        LEFT JOIN users u ON p.author_id = u.id
-        LEFT JOIN post_labels pl ON p.id = pl.post_id
-        LEFT JOIN unique_labels ul ON pl.label_id = ul.id
-        WHERE p.is_spotlight = 1
-          AND p.deleted_at IS NULL
-          AND p.status = 'published'
-        GROUP BY p.id, u.name, u.email
-        ORDER BY p.created_at DESC
-      `);
+    connection = await db.getConnection();
 
-      // Format response
-      const formattedPosts = posts.map(post => ({
+    // Query untuk mengambil spotlight posts - gunakan query yang lebih sederhana
+    const [posts] = await connection.query(`
+      SELECT
+        p.id, p.title, p.slug, p.content, p.image, p.status,
+        p.created_at, p.updated_at, p.is_featured, p.is_spotlight,
+        u.name as author_name,
+        u.email as author_email
+      FROM posts p
+      LEFT JOIN users u ON p.author_id = u.id
+      WHERE p.is_spotlight = 1
+        AND p.deleted_at IS NULL
+        AND p.status = 'published'
+      ORDER BY p.created_at DESC
+      LIMIT 6
+    `);
+
+    // Ambil label secara terpisah untuk mengurangi kompleksitas query
+    const postIds = posts.map(post => post.id);
+    let labels = [];
+
+    if (postIds.length > 0) {
+      const [labelRows] = await connection.query(`
+        SELECT pl.post_id, ul.id, ul.label
+        FROM post_labels pl
+        JOIN unique_labels ul ON pl.label_id = ul.id
+        WHERE pl.post_id IN (?)
+      `, [postIds]);
+
+      labels = labelRows;
+    }
+
+    // Format response
+    const formattedPosts = posts.map(post => {
+      const postLabels = labels
+        .filter(label => label.post_id === post.id)
+        .map(label => ({ id: label.id, label: label.label }));
+
+      return {
         ...post,
         is_spotlight: Boolean(post.is_spotlight),
         is_featured: Boolean(post.is_featured),
-        labels: post.labels ? JSON.parse(`[${post.labels}]`).filter(Boolean) : []
-      }));
+        labels: postLabels || []
+      };
+    });
 
-      res.json({
-        success: true,
-        data: formattedPosts,
-        pagination: {
-          currentPage: 1,
-          totalPages: 1,
-          totalItems: formattedPosts.length
-        }
-      });
-    } catch (error) {
-      logger.error('Database error in getSpotlightPosts:', {
-        error: error.message,
-        stack: error.stack
-      });
-      throw error;
-    } finally {
-      connection.release();
-    }
+    res.json({
+      success: true,
+      data: formattedPosts,
+      pagination: {
+        currentPage: 1,
+        totalPages: 1,
+        totalItems: formattedPosts.length
+      }
+    });
   } catch (error) {
     logger.error('Error fetching spotlight posts:', {
       error: error.message,
       stack: error.stack
     });
+
     res.status(500).json({
       success: false,
-      message: 'Error fetching spotlight posts',
+      message: 'Terjadi kesalahan dalam mengambil spotlight posts',
       error: error.message
     });
+  } finally {
+    // Pastikan koneksi selalu dilepas
+    if (connection) {
+      try {
+        connection.release();
+      } catch (releaseError) {
+        logger.error('Error releasing connection:', releaseError);
+      }
+    }
   }
 };
 
@@ -1111,10 +1144,10 @@ exports.getRelatedPosts = async (req, res) => {
     // Query untuk mendapatkan related posts dengan format tanggal yang benar
     const [relatedPosts] = await connection.query(`
       SELECT
-        p.id, 
-        p.title, 
-        p.slug, 
-        p.excerpt, 
+        p.id,
+        p.title,
+        p.slug,
+        p.excerpt,
         p.image,
         DATE_FORMAT(p.created_at, '%Y-%m-%dT%H:%i:%s.000Z') as created_at,
         DATE_FORMAT(p.publish_date, '%Y-%m-%dT%H:%i:%s.000Z') as publish_date,
@@ -1149,7 +1182,7 @@ exports.getRelatedPosts = async (req, res) => {
       success: true,
       data: formattedPosts
     });
-    
+
   } catch (error) {
     console.error('Error getting related posts:', error);
     res.status(500).json({

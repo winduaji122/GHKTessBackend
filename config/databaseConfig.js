@@ -11,10 +11,10 @@ const dbConfig = {
   password: process.env.DB_PASSWORD,
   database: process.env.DB_NAME,
   waitForConnections: true,
-  connectionLimit: process.env.NODE_ENV === 'production' ? 5 : 15, // Lebih sedikit koneksi di production untuk serverless
-  idleTimeout: process.env.NODE_ENV === 'production' ? 30000 : 60000, // Timeout lebih cepat di production
-  queueLimit: 0,
-  enableKeepAlive: true,
+  connectionLimit: process.env.NODE_ENV === 'production' ? 3 : 10, // Batasi koneksi di production untuk Clever Cloud
+  idleTimeout: process.env.NODE_ENV === 'production' ? 10000 : 60000, // Timeout lebih cepat di production
+  queueLimit: 10, // Batasi antrian untuk mencegah overload
+  enableKeepAlive: false, // Nonaktifkan keepalive di serverless
   keepAliveInitialDelay: 0
 };
 
