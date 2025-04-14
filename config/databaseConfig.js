@@ -11,11 +11,13 @@ const dbConfig = {
   password: process.env.DB_PASSWORD,
   database: process.env.DB_NAME,
   waitForConnections: true,
-  connectionLimit: process.env.NODE_ENV === 'production' ? 3 : 10, // Batasi koneksi di production untuk Clever Cloud
-  idleTimeout: process.env.NODE_ENV === 'production' ? 10000 : 60000, // Timeout lebih cepat di production
-  queueLimit: 10, // Batasi antrian untuk mencegah overload
+  connectionLimit: process.env.NODE_ENV === 'production' ? 2 : 10, // Batasi koneksi di production untuk Clever Cloud (max 5)
+  idleTimeout: process.env.NODE_ENV === 'production' ? 5000 : 60000, // Timeout lebih cepat di production
+  queueLimit: 0, // Tidak ada antrian, langsung error jika koneksi penuh
   enableKeepAlive: false, // Nonaktifkan keepalive di serverless
-  keepAliveInitialDelay: 0
+  keepAliveInitialDelay: 0,
+  multipleStatements: false, // Nonaktifkan multiple statements untuk keamanan
+  connectTimeout: 10000 // Timeout koneksi 10 detik
 };
 
 // Tambahkan SSL jika diperlukan
@@ -47,48 +49,66 @@ let inMemoryCache = {};
 
 // Periksa apakah Redis diaktifkan dan apakah kita berada di Vercel
 const isVercel = process.env.VERCEL === '1';
-const redisEnabled = process.env.REDIS_ENABLED !== 'false';
+const redisEnabled = process.env.REDIS_ENABLED === 'true';
 
-// Di Vercel, kita selalu nonaktifkan Redis
-if (isVercel) {
-  logger.info('Running on Vercel, Redis disabled');
-} else if (redisEnabled) {
+// Di Vercel atau jika Redis tidak diaktifkan secara eksplisit, kita nonaktifkan Redis
+if (isVercel || !redisEnabled) {
+  logger.info('Redis disabled', {
+    reason: isVercel ? 'Running on Vercel' : 'Not explicitly enabled',
+    service: 'cache-service'
+  });
+} else {
   try {
     logger.info('Attempting to connect to Redis:', {
       host: process.env.REDIS_HOST || 'localhost',
-      port: process.env.REDIS_PORT || 6379
+      port: process.env.REDIS_PORT || 6379,
+      service: 'cache-service'
     });
 
+    // Buat instance Redis dengan timeout dan retry strategy yang lebih agresif
     redis = new Redis({
       host: process.env.REDIS_HOST || 'localhost',
       port: process.env.REDIS_PORT || 6379,
-      maxRetriesPerRequest: null,
-      commandTimeout: 5000,
+      connectTimeout: 5000,
+      maxRetriesPerRequest: 2,
+      commandTimeout: 3000,
       retryStrategy(times) {
-        const delay = Math.min(times * 50, 2000);
-        return delay;
+        // Hanya coba ulang 2 kali dengan delay 500ms
+        if (times > 2) {
+          logger.warn('Redis retry limit reached, giving up', { service: 'cache-service' });
+          return null; // Berhenti mencoba
+        }
+        return 500;
       },
     });
 
+    // Tangani error Redis
     redis.on('error', (err) => {
-      logger.error('Redis error:', err);
+      logger.error('Redis Client Error', {
+        error: err.message,
+        code: err.code,
+        service: 'cache-service'
+      });
+
       // Jika terjadi error koneksi, set redis ke null
-      if (err.code === 'ECONNREFUSED') {
-        logger.warn('Redis connection refused, falling back to in-memory cache');
+      if (err.code === 'ECONNREFUSED' || err.code === 'ETIMEDOUT') {
+        logger.warn('Redis connection failed, falling back to in-memory cache', { service: 'cache-service' });
         redis = null;
       }
     });
 
     redis.on('connect', () => {
-      logger.info('Redis connected successfully');
+      logger.info('Redis connected successfully', { service: 'cache-service' });
     });
   } catch (error) {
-    logger.error('Failed to initialize Redis:', error);
+    logger.error('Failed to initialize Redis:', {
+      error: error.message,
+      stack: error.stack,
+      service: 'cache-service'
+    });
     // Fallback to in-memory cache if Redis initialization fails
     redis = null;
   }
-} else {
-  logger.info('Redis disabled by configuration');
 }
 
 // If Redis is disabled or failed to initialize, use in-memory cache
@@ -145,9 +165,28 @@ async function getConnection() {
 const executeQuery = async (queryOrCallback, params = []) => {
   let connection;
   try {
-    connection = await pool.getConnection();
-    logger.info('MySQL connection ' + connection.threadId + ' acquired', { service: 'user-service' });
-    logger.info('Connection acquired', { service: 'user-service' });
+    // Tambahkan timeout untuk mendapatkan koneksi
+    const getConnectionPromise = pool.getConnection();
+    const timeoutPromise = new Promise((_, reject) => {
+      setTimeout(() => reject(new Error('Connection acquisition timeout')), 5000);
+    });
+
+    try {
+      connection = await Promise.race([getConnectionPromise, timeoutPromise]);
+    } catch (connError) {
+      logger.error('Failed to acquire connection:', {
+        error: connError.message,
+        stack: connError.stack,
+        service: 'database-service'
+      });
+      throw new Error(`Database connection error: ${connError.message}`);
+    }
+
+    // Log koneksi yang berhasil didapatkan
+    logger.info('MySQL connection acquired', {
+      threadId: connection.threadId,
+      service: 'database-service'
+    });
 
     // Jika queryOrCallback adalah fungsi, jalankan dengan connection
     if (typeof queryOrCallback === 'function') {
@@ -159,13 +198,31 @@ const executeQuery = async (queryOrCallback, params = []) => {
     return results;
 
   } catch (error) {
-    logger.error('Database error:', error, { service: 'user-service' });
+    logger.error('Database query error:', {
+      error: error.message,
+      code: error.code,
+      errno: error.errno,
+      sqlState: error.sqlState,
+      sqlMessage: error.sqlMessage,
+      stack: error.stack,
+      service: 'database-service'
+    });
     throw error;
   } finally {
     if (connection) {
-      logger.info('MySQL connection ' + connection.threadId + ' released', { service: 'user-service' });
-      logger.info('Connection released', { service: 'user-service' });
-      connection.release();
+      try {
+        connection.release();
+        logger.info('MySQL connection released', {
+          threadId: connection.threadId,
+          service: 'database-service'
+        });
+      } catch (releaseError) {
+        logger.error('Error releasing connection:', {
+          error: releaseError.message,
+          stack: releaseError.stack,
+          service: 'database-service'
+        });
+      }
     }
   }
 };
@@ -409,16 +466,60 @@ async function getFeaturedPosts(limit = 5) {
 async function testConnections() {
   try {
     // Test MySQL
-    const connection = await pool.getConnection();
-    await connection.query('SELECT 1');
-    logger.info('MySQL connection successful');
-    connection.release();
+    const getConnectionPromise = pool.getConnection();
+    const timeoutPromise = new Promise((_, reject) => {
+      setTimeout(() => reject(new Error('Connection acquisition timeout')), 5000);
+    });
 
-    // Test Redis
-    await redis.ping();
-    logger.info('Redis connection successful');
+    let connection;
+    try {
+      connection = await Promise.race([getConnectionPromise, timeoutPromise]);
+      await connection.query('SELECT 1');
+      logger.info('MySQL connection successful', { service: 'database-service' });
+    } catch (dbError) {
+      logger.error('MySQL connection test failed:', {
+        error: dbError.message,
+        code: dbError.code,
+        errno: dbError.errno,
+        sqlState: dbError.sqlState,
+        sqlMessage: dbError.sqlMessage,
+        service: 'database-service'
+      });
+      throw dbError;
+    } finally {
+      if (connection) {
+        try {
+          connection.release();
+        } catch (releaseError) {
+          logger.error('Error releasing test connection:', releaseError);
+        }
+      }
+    }
+
+    // Test Redis only if it's enabled
+    if (redis) {
+      try {
+        await Promise.race([
+          redis.ping(),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('Redis ping timeout')), 3000))
+        ]);
+        logger.info('Redis connection successful', { service: 'cache-service' });
+      } catch (redisError) {
+        logger.error('Redis connection test failed:', {
+          error: redisError.message,
+          code: redisError.code,
+          service: 'cache-service'
+        });
+        // Don't throw here, just log the error and continue
+        // We can operate without Redis
+      }
+    }
   } catch (error) {
-    logger.error('Error testing connections:', error.message);
+    logger.error('Error testing connections:', {
+      error: error.message,
+      stack: error.stack,
+      service: 'database-service'
+    });
     throw error;
   }
 }
