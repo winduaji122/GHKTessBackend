@@ -42,30 +42,53 @@ pool.on('enqueue', function () {
 });
 
 // Redis configuration - conditionally create based on environment
-let redis;
+let redis = null;
 let inMemoryCache = {};
 
-if (process.env.REDIS_ENABLED !== 'false') {
+// Periksa apakah Redis diaktifkan dan apakah kita berada di Vercel
+const isVercel = process.env.VERCEL === '1';
+const redisEnabled = process.env.REDIS_ENABLED !== 'false';
+
+// Di Vercel, kita selalu nonaktifkan Redis
+if (isVercel) {
+  logger.info('Running on Vercel, Redis disabled');
+} else if (redisEnabled) {
   try {
+    logger.info('Attempting to connect to Redis:', {
+      host: process.env.REDIS_HOST || 'localhost',
+      port: process.env.REDIS_PORT || 6379
+    });
+
     redis = new Redis({
       host: process.env.REDIS_HOST || 'localhost',
       port: process.env.REDIS_PORT || 6379,
       maxRetriesPerRequest: null,
       commandTimeout: 5000,
-    retryStrategy(times) {
-      const delay = Math.min(times * 50, 2000);
-      return delay;
-    },
-  });
+      retryStrategy(times) {
+        const delay = Math.min(times * 50, 2000);
+        return delay;
+      },
+    });
 
     redis.on('error', (err) => {
       logger.error('Redis error:', err);
+      // Jika terjadi error koneksi, set redis ke null
+      if (err.code === 'ECONNREFUSED') {
+        logger.warn('Redis connection refused, falling back to in-memory cache');
+        redis = null;
+      }
+    });
+
+    redis.on('connect', () => {
+      logger.info('Redis connected successfully');
     });
   } catch (error) {
     logger.error('Failed to initialize Redis:', error);
     // Fallback to in-memory cache if Redis initialization fails
     redis = null;
   }
+} else {
+  logger.info('Redis disabled by configuration');
 }
 
 // If Redis is disabled or failed to initialize, use in-memory cache
