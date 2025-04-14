@@ -60,6 +60,7 @@ const userService = require('../services/userService');
 const emailService = require('../utils/emailService');
 const { logger } = require('../utils/logger');
 const { executeQuery } = require('../config/databaseConfig');
+const { loginRateLimiterMiddleware } = require('../utils/rateLimiter');
 
 // Konfigurasi rate limiter berdasarkan environment
 const isProduction = process.env.NODE_ENV === 'production';
@@ -67,14 +68,35 @@ const isProduction = process.env.NODE_ENV === 'production';
 // Rate Limiter untuk auth dengan konfigurasi yang lebih longgar
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 menit
-  max: isProduction ? 50 : 1000, // Lebih longgar untuk auth
+  max: isProduction ? 100 : 1000, // Sangat longgar untuk auth
   message: {
     code: 'RATE_LIMIT_EXCEEDED',
     message: 'Terlalu banyak percobaan, silakan coba lagi nanti.'
   },
   standardHeaders: true,
   legacyHeaders: false,
-  skipSuccessfulRequests: true // Hanya hitung request yang gagal
+  skipSuccessfulRequests: true, // Hanya hitung request yang gagal
+  keyGenerator: (req) => {
+    // Gunakan kombinasi IP + path untuk membedakan endpoint
+    return req.ip + '-' + req.path;
+  }
+});
+
+// Rate Limiter khusus untuk login dengan batas yang sangat tinggi
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 menit
+  max: isProduction ? 200 : 2000, // Sangat longgar untuk login
+  message: {
+    code: 'RATE_LIMIT_EXCEEDED',
+    message: 'Terlalu banyak percobaan login, silakan coba lagi nanti.'
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+  skipSuccessfulRequests: true, // Hanya hitung request yang gagal
+  keyGenerator: (req) => {
+    // Gunakan IP + user agent untuk mengurangi false positive
+    return req.ip + '-login-' + (req.headers['user-agent'] || 'unknown').substring(0, 20);
+  }
 });
 
 // Rate Limiter khusus untuk CSRF token dengan batas yang sangat tinggi
@@ -114,12 +136,17 @@ const csrfProtection = csrf({
 
 // Public Routes (tidak perlu token)
 router.post('/register', authLimiter, validateRegistration, authController.register);
-router.post('/login', authLimiter, csrfProtection, validateLogin, authController.login);
+
+// Gunakan loginRateLimiterMiddleware khusus untuk endpoint login
+router.post('/login', loginRateLimiterMiddleware, csrfProtection, validateLogin, authController.login);
+
 router.post('/refresh-token', authController.refreshToken);
 router.post('/google-login', authLimiter, authController.googleLogin);
 router.get('/verify/:token', authController.verifyEmail);
 router.post('/forgot-password', emailLimiter, validateForgotPassword, authController.forgotPassword);
 router.post('/reset-password', authLimiter, validatePasswordReset, authController.resetPassword);
+
+// Gunakan csrfLimiter khusus untuk endpoint CSRF token
 router.get('/csrf-token', csrfLimiter, csrfProtection, authController.getCsrfToken);
 
 // Global middleware untuk semua route di bawah
