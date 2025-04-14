@@ -10,10 +10,10 @@ const dbConfig = {
   user: process.env.DB_USER,
   password: process.env.DB_PASSWORD,
   database: process.env.DB_NAME,
-  waitForConnections: false, // Jangan tunggu koneksi, langsung error jika tidak tersedia
-  connectionLimit: process.env.NODE_ENV === 'production' ? 3 : 10, // Batasi koneksi di production untuk Clever Cloud (max 5)
-  idleTimeout: process.env.NODE_ENV === 'production' ? 1000 : 60000, // Timeout lebih cepat di production
-  queueLimit: 0, // Tidak ada antrian, langsung error jika koneksi penuh
+  waitForConnections: true, // Tunggu koneksi jika tidak tersedia
+  connectionLimit: process.env.NODE_ENV === 'production' ? 2 : 10, // Batasi koneksi di production untuk Clever Cloud (max 5)
+  idleTimeout: process.env.NODE_ENV === 'production' ? 500 : 60000, // Timeout sangat cepat di production
+  queueLimit: 10, // Antri hingga 10 request jika koneksi penuh
   enableKeepAlive: false, // Nonaktifkan keepalive di serverless
   keepAliveInitialDelay: 0,
   multipleStatements: false, // Nonaktifkan multiple statements untuk keamanan
@@ -163,7 +163,10 @@ async function getConnection() {
   return await pool.getConnection();
 }
 
-const executeQuery = async (queryOrCallback, params = []) => {
+const executeQuery = async (queryOrCallback, params = [], retryCount = 0) => {
+  const MAX_RETRIES = 3;
+  const RETRY_DELAY = 500; // ms
+
   let connection;
   try {
     // Tambahkan timeout untuk mendapatkan koneksi
@@ -178,8 +181,19 @@ const executeQuery = async (queryOrCallback, params = []) => {
       logger.error('Failed to acquire connection:', {
         error: connError.message,
         stack: connError.stack,
+        retryCount,
         service: 'database-service'
       });
+
+      // Retry logic for connection errors
+      if (retryCount < MAX_RETRIES &&
+          (connError.message.includes('max_user_connections') ||
+           connError.message.includes('Connection acquisition timeout'))) {
+        logger.info(`Retrying database connection (${retryCount + 1}/${MAX_RETRIES})...`);
+        await new Promise(resolve => setTimeout(resolve, RETRY_DELAY * (retryCount + 1)));
+        return executeQuery(queryOrCallback, params, retryCount + 1);
+      }
+
       throw new Error(`Database connection error: ${connError.message}`);
     }
 
@@ -223,7 +237,12 @@ const executeQuery = async (queryOrCallback, params = []) => {
           stack: releaseError.stack,
           service: 'database-service'
         });
+        // Don't throw here to prevent crashes
       }
+    } else {
+      logger.warn('No connection to release', {
+        service: 'database-service'
+      });
     }
   }
 };

@@ -14,6 +14,16 @@ const { clearCache } = require('../utils/cacheHandler');
 const db = require('../config/databaseConfig');
 const { isAuthenticated } = require('../middleware/authMiddleware');
 
+// Fallback data untuk kasus error database
+const FALLBACK_POSTS = {
+  posts: [],
+  totalCount: 0,
+  currentPage: 1,
+  totalPages: 0,
+  success: true,
+  message: 'Fallback data due to database connection issues'
+};
+
 exports.getAllPosts = async (req, res) => {
   try {
     const {
@@ -219,6 +229,15 @@ exports.getAllPosts = async (req, res) => {
       sqlMessage: error.sqlMessage,
       stack: error.stack
     });
+
+    // Jika error terkait koneksi database, gunakan fallback data
+    if (error.message.includes('max_user_connections') ||
+        error.message.includes('Connection acquisition timeout') ||
+        error.message.includes('Database connection error')) {
+      logger.warn('Using fallback data for getAllPosts due to database connection issues');
+      return res.status(200).json(FALLBACK_POSTS);
+    }
+
     res.status(500).json({
       success: false,
       message: 'Terjadi kesalahan dalam mengambil data posts',
