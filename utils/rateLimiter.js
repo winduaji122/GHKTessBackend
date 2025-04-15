@@ -32,22 +32,22 @@ const RATE_LIMIT_CONFIG = {
   // Konfigurasi untuk production
   production: {
     general: {
-      points: 2000,      // 2000 permintaan
+      points: 5000,      // 5000 permintaan
       duration: 60 * 15, // per 15 menit
-      blockDuration: 30  // blokir 30 detik jika melebihi
+      blockDuration: 10  // blokir 10 detik jika melebihi
     },
     csrf: {
-      points: 1000,      // 1000 permintaan
+      points: 3000,      // 3000 permintaan
       duration: 60 * 15, // per 15 menit
-      blockDuration: 15  // blokir 15 detik jika melebihi
+      blockDuration: 5   // blokir 5 detik jika melebihi
     },
     auth: {
-      points: 500,       // 500 permintaan
+      points: 2000,      // 2000 permintaan
       duration: 60 * 15, // per 15 menit
-      blockDuration: 30  // blokir 30 detik jika melebihi
+      blockDuration: 10  // blokir 10 detik jika melebihi
     },
     login: {
-      points: 500,       // 500 permintaan login
+      points: 2000,      // 2000 permintaan login
       duration: 60 * 15, // per 15 menit
       blockDuration: 5   // blokir 5 detik jika melebihi
     }

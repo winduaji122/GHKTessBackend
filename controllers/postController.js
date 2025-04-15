@@ -139,13 +139,13 @@ exports.getAllPosts = async (req, res) => {
       } catch (connError) {
         logger.error('Failed to acquire connection in getAllPosts:', {
           error: connError.message,
-          stack: connError.stack
+          stack: connError.stack,
+          service: 'database-service'
         });
-        return res.status(500).json({
-          success: false,
-          message: 'Tidak dapat terhubung ke database',
-          error: 'Database connection error'
-        });
+
+        // Gunakan fallback data untuk error koneksi database
+        logger.warn('Using fallback data for getAllPosts due to connection error');
+        return res.status(200).json(FALLBACK_POSTS);
       }
 
       // Eksekusi query utama
@@ -230,11 +230,9 @@ exports.getAllPosts = async (req, res) => {
       stack: error.stack
     });
 
-    // Jika error terkait koneksi database, gunakan fallback data
-    if (error.message.includes('max_user_connections') ||
-        error.message.includes('Connection acquisition timeout') ||
-        error.message.includes('Database connection error')) {
-      logger.warn('Using fallback data for getAllPosts due to database connection issues');
+    // Selalu gunakan fallback data untuk error apapun di production
+    if (process.env.NODE_ENV === 'production') {
+      logger.warn('Using fallback data for getAllPosts due to error in production');
       return res.status(200).json(FALLBACK_POSTS);
     }
 
@@ -1050,12 +1048,23 @@ exports.toggleFeatured = async (req, res) => {
       });
       throw error;
     } finally {
-      connection.release();
+      if (connection) {
+        try {
+          connection.release();
+        } catch (releaseError) {
+          logger.error('Error releasing connection in toggleFeatured:', {
+            error: releaseError.message,
+            stack: releaseError.stack,
+            service: 'database-service'
+          });
+        }
+      }
     }
   } catch (error) {
     logger.error('Error in toggleFeatured:', {
       error: error.message,
-      stack: error.stack
+      stack: error.stack,
+      service: 'database-service'
     });
 
     res.status(500).json({

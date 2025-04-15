@@ -1,7 +1,15 @@
-const { redis } = require('../config/databaseConfig');
+const { redis, redisEnabled } = require('../config/databaseConfig');
 const { logger } = require('./logger');
 
+// Dummy cache untuk digunakan ketika Redis tidak tersedia
+const memoryCache = new Map();
+
 const clearCache = async (pattern) => {
+  // Skip jika Redis tidak diaktifkan
+  if (!redisEnabled) {
+    return;
+  }
+
   try {
     const keys = await redis.keys(`*${pattern}*`);
     if (keys.length > 0) {
@@ -14,6 +22,11 @@ const clearCache = async (pattern) => {
 };
 
 const setCache = async (key, data, expires = 300) => {
+  // Skip jika Redis tidak diaktifkan
+  if (!redisEnabled) {
+    return;
+  }
+
   try {
     await redis.setex(key, expires, JSON.stringify(data));
     logger.info(`Cache set for key: ${key}`);
@@ -23,6 +36,11 @@ const setCache = async (key, data, expires = 300) => {
 };
 
 const getCache = async (key) => {
+  // Skip jika Redis tidak diaktifkan
+  if (!redisEnabled) {
+    return null;
+  }
+
   try {
     const data = await redis.get(key);
     return data ? JSON.parse(data) : null;
@@ -44,4 +62,4 @@ module.exports = {
   setCache,
   getCache,
   cacheKeys
-}; 
+};

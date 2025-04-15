@@ -3,6 +3,9 @@
 // Set NODE_ENV to production for Vercel
 process.env.NODE_ENV = 'production';
 
+// Explicitly disable Redis for Vercel
+process.env.REDIS_ENABLED = 'false';
+
 // Load dotenv only if not in production (Vercel sets env vars directly)
 if (process.env.NODE_ENV !== 'production') {
   require('dotenv').config();

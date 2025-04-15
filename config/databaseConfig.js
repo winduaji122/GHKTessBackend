@@ -11,14 +11,14 @@ const dbConfig = {
   password: process.env.DB_PASSWORD,
   database: process.env.DB_NAME,
   waitForConnections: true, // Tunggu koneksi jika tidak tersedia
-  connectionLimit: process.env.NODE_ENV === 'production' ? 2 : 10, // Batasi koneksi di production untuk Clever Cloud (max 5)
-  idleTimeout: process.env.NODE_ENV === 'production' ? 500 : 60000, // Timeout sangat cepat di production
+  connectionLimit: 2, // Batasi koneksi ke 2 untuk Clever Cloud (max 5)
+  idleTimeout: 30000, // 30 detik timeout untuk koneksi idle
   queueLimit: 10, // Antri hingga 10 request jika koneksi penuh
   enableKeepAlive: false, // Nonaktifkan keepalive di serverless
   keepAliveInitialDelay: 0,
   multipleStatements: false, // Nonaktifkan multiple statements untuk keamanan
-  connectTimeout: 5000, // Timeout koneksi 5 detik
-  acquireTimeout: 4000 // Timeout untuk mendapatkan koneksi dari pool
+  connectTimeout: 10000, // Timeout koneksi 10 detik
+  acquireTimeout: 8000 // Timeout untuk mendapatkan koneksi dari pool
 };
 
 // Tambahkan SSL jika diperlukan
@@ -50,10 +50,10 @@ let inMemoryCache = {};
 
 // Periksa apakah Redis diaktifkan dan apakah kita berada di Vercel
 const isVercel = process.env.VERCEL === '1';
-const redisEnabled = process.env.REDIS_ENABLED === 'true';
+const redisEnabled = process.env.REDIS_ENABLED === 'true' && !isVercel; // Selalu nonaktifkan Redis di Vercel
 
-// Di Vercel atau jika Redis tidak diaktifkan secara eksplisit, kita nonaktifkan Redis
-if (isVercel || !redisEnabled) {
+// Selalu nonaktifkan Redis di Vercel, atau jika Redis tidak diaktifkan secara eksplisit
+if (!redisEnabled) {
   logger.info('Redis disabled', {
     reason: isVercel ? 'Running on Vercel' : 'Not explicitly enabled',
     service: 'cache-service'
@@ -114,7 +114,7 @@ if (isVercel || !redisEnabled) {
 
 // If Redis is disabled or failed to initialize, use in-memory cache
 if (!redis) {
-  logger.info('Redis disabled, using in-memory cache');
+  logger.info('Redis disabled, using in-memory cache', { service: 'cache-service' });
   const memoryCache = inMemoryCache;
   redis = {
     setex: async (key, expires, value) => {
@@ -164,8 +164,8 @@ async function getConnection() {
 }
 
 const executeQuery = async (queryOrCallback, params = [], retryCount = 0) => {
-  const MAX_RETRIES = 3;
-  const RETRY_DELAY = 500; // ms
+  const MAX_RETRIES = 5;
+  const RETRY_DELAY = 1000; // ms
 
   let connection;
   try {
@@ -188,20 +188,24 @@ const executeQuery = async (queryOrCallback, params = [], retryCount = 0) => {
       // Retry logic for connection errors
       if (retryCount < MAX_RETRIES &&
           (connError.message.includes('max_user_connections') ||
-           connError.message.includes('Connection acquisition timeout'))) {
-        logger.info(`Retrying database connection (${retryCount + 1}/${MAX_RETRIES})...`);
-        await new Promise(resolve => setTimeout(resolve, RETRY_DELAY * (retryCount + 1)));
+           connError.message.includes('Connection acquisition timeout') ||
+           connError.message.includes('ETIMEDOUT') ||
+           connError.message.includes('ECONNREFUSED'))) {
+        logger.info(`Retrying database connection (${retryCount + 1}/${MAX_RETRIES})...`, { service: 'database-service' });
+        await new Promise(resolve => setTimeout(resolve, RETRY_DELAY * Math.pow(2, retryCount)));
         return executeQuery(queryOrCallback, params, retryCount + 1);
       }
 
       throw new Error(`Database connection error: ${connError.message}`);
     }
 
-    // Log koneksi yang berhasil didapatkan
-    logger.info('MySQL connection acquired', {
-      threadId: connection.threadId,
-      service: 'database-service'
-    });
+    // Log koneksi yang berhasil didapatkan (hanya di development)
+    if (process.env.NODE_ENV !== 'production') {
+      logger.info('MySQL connection acquired', {
+        threadId: connection.threadId,
+        service: 'database-service'
+      });
+    }
 
     // Jika queryOrCallback adalah fungsi, jalankan dengan connection
     if (typeof queryOrCallback === 'function') {
@@ -227,10 +231,13 @@ const executeQuery = async (queryOrCallback, params = [], retryCount = 0) => {
     if (connection) {
       try {
         connection.release();
-        logger.info('MySQL connection released', {
-          threadId: connection.threadId,
-          service: 'database-service'
-        });
+        // Log koneksi yang dilepas (hanya di development)
+        if (process.env.NODE_ENV !== 'production') {
+          logger.info('MySQL connection released', {
+            threadId: connection.threadId,
+            service: 'database-service'
+          });
+        }
       } catch (releaseError) {
         logger.error('Error releasing connection:', {
           error: releaseError.message,
