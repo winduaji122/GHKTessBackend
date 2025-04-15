@@ -738,6 +738,13 @@ exports.deletePost = [isAdminOrWriter, async (req, res) => {
   }
 }];
 
+// Fallback data untuk featured posts
+const FALLBACK_FEATURED_POSTS = {
+  success: true,
+  message: 'Fallback featured posts data due to database connection issues',
+  data: []
+};
+
 exports.getFeaturedPosts = async (req, res) => {
   let connection;
   try {
@@ -748,7 +755,19 @@ exports.getFeaturedPosts = async (req, res) => {
     const isAdmin = req.query.admin === 'true';
 
     // Gunakan koneksi langsung dari db
-    connection = await db.getConnection();
+    try {
+      connection = await db.getConnection();
+    } catch (connError) {
+      logger.error('Failed to acquire connection in getFeaturedPosts:', {
+        error: connError.message,
+        stack: connError.stack,
+        service: 'database-service'
+      });
+
+      // Gunakan fallback data untuk error koneksi database
+      logger.warn('Using fallback data for getFeaturedPosts due to connection error');
+      return res.status(200).json(FALLBACK_FEATURED_POSTS);
+    }
 
     // Query untuk mengambil featured posts - gunakan query yang lebih sederhana
     let query = `
@@ -847,13 +866,32 @@ exports.getFeaturedPosts = async (req, res) => {
   }
 };
 
+// Fallback data untuk spotlight posts
+const FALLBACK_SPOTLIGHT_POSTS = {
+  success: true,
+  message: 'Fallback spotlight posts data due to database connection issues',
+  data: []
+};
+
 exports.getSpotlightPosts = async (req, res) => {
   let connection;
   try {
     logger.info('Fetching spotlight posts');
 
     // Gunakan koneksi langsung dari db
-    connection = await db.getConnection();
+    try {
+      connection = await db.getConnection();
+    } catch (connError) {
+      logger.error('Failed to acquire connection in getSpotlightPosts:', {
+        error: connError.message,
+        stack: connError.stack,
+        service: 'database-service'
+      });
+
+      // Gunakan fallback data untuk error koneksi database
+      logger.warn('Using fallback data for getSpotlightPosts due to connection error');
+      return res.status(200).json(FALLBACK_SPOTLIGHT_POSTS);
+    }
 
     // Query untuk mengambil spotlight posts - gunakan query yang lebih sederhana
     const [posts] = await connection.query(`

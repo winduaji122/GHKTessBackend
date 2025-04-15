@@ -7,8 +7,8 @@ const WHITELIST_IPS = [
   '127.0.0.1',
   'localhost',
   '::1',
-  // Tambahkan IP Anda di sini jika diperlukan
-  // Tambahkan IP publik Anda untuk testing
+  // Tambahkan IP pengguna
+  '36.80.235.21', // IP pengguna yang mengalami masalah rate limit
   '0.0.0.0', // Placeholder untuk semua IP (hanya untuk debugging)
 ];
 
@@ -32,24 +32,24 @@ const RATE_LIMIT_CONFIG = {
   // Konfigurasi untuk production
   production: {
     general: {
-      points: 5000,      // 5000 permintaan
+      points: 10000,     // 10000 permintaan
       duration: 60 * 15, // per 15 menit
-      blockDuration: 10  // blokir 10 detik jika melebihi
+      blockDuration: 5   // blokir 5 detik jika melebihi
     },
     csrf: {
-      points: 3000,      // 3000 permintaan
+      points: 5000,      // 5000 permintaan
       duration: 60 * 15, // per 15 menit
-      blockDuration: 5   // blokir 5 detik jika melebihi
+      blockDuration: 3   // blokir 3 detik jika melebihi
     },
     auth: {
-      points: 2000,      // 2000 permintaan
-      duration: 60 * 15, // per 15 menit
-      blockDuration: 10  // blokir 10 detik jika melebihi
-    },
-    login: {
-      points: 2000,      // 2000 permintaan login
+      points: 5000,      // 5000 permintaan
       duration: 60 * 15, // per 15 menit
       blockDuration: 5   // blokir 5 detik jika melebihi
+    },
+    login: {
+      points: 5000,      // 5000 permintaan login
+      duration: 60 * 15, // per 15 menit
+      blockDuration: 3   // blokir 3 detik jika melebihi
     }
   },
   // Konfigurasi untuk development (lebih longgar)
