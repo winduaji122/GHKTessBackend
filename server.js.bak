@@ -49,11 +49,6 @@ const postsRouter = require('./routes/posts');
 const searchRoutes = require('./routes/search');
 const uploadRoutes = require('./routes/uploadRoutes');
 const carouselRoutes = require('./routes/carouselRoutes');
-const carouselPostRoutes = require('./routes/carouselPostRoutes');
-const commentsRouter = require('./routes/comments');
-const likesRouter = require('./routes/likes');
-const dashboardRouter = require('./routes/dashboard');
-const staticPagesRouter = require('./routes/staticPages');
 
 const app = express();
 
@@ -135,11 +130,7 @@ const corsOptions = {
     'Cache-Control',
     'If-None-Match',
     'If-Modified-Since',
-    'Pragma',
-    'Expires',
-    'X-Client-ID',
-    'X-User-Identity',
-    'X-Public-Request'
+    'Pragma'
   ],
   exposedHeaders: [
     'Set-Cookie',
@@ -306,30 +297,6 @@ app.use('/uploads', expressStaticGzip(uploadsPath, {
   }
 }));
 
-// Konfigurasi khusus untuk direktori /uploads/profiles/
-app.use('/uploads/profiles', (req, res, next) => {
-  // Log akses ke file profil
-  const filePath = path.join(profilesPath, req.path);
-  logger.info('Profile image accessed:', {
-    path: req.path,
-    fullPath: filePath,
-    exists: fs.existsSync(filePath),
-    method: req.method,
-    headers: req.headers
-  });
-  next();
-}, express.static(profilesPath, {
-  maxAge: '1d',
-  etag: true,
-  lastModified: true,
-  setHeaders: (res, path) => {
-    res.setHeader('Cache-Control', 'public, max-age=86400, must-revalidate');
-    res.setHeader('Access-Control-Allow-Origin', FRONTEND_URL);
-    res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
-    res.setHeader('X-Served-By', 'express-static-profiles');
-  }
-}));
-
 app.use('/uploads', (req, res, next) => {
   const filePath = path.join(uploadsPath, req.path);
   logger.info('Accessing upload file:', {
@@ -380,14 +347,6 @@ app.get('/api/check-file/:filename', (req, res) => {
 });
 
 // API Routes
-// Tambahkan middleware untuk menangani permintaan ke /auth/refresh-token
-app.get('/auth/refresh-token', (req, res) => {
-  logger.info('Redirecting from /auth/refresh-token to /api/auth/refresh-token');
-  // Redirect ke endpoint yang benar
-  req.url = '/api/auth/refresh-token';
-  app.handle(req, res);
-});
-
 app.use('/api/auth',
   // Tidak menggunakan rate limiter global di sini, karena sudah ada di authRoutes.js
   (req, res, next) => {
@@ -416,54 +375,13 @@ app.get('/api/debug/cors', (req, res) => {
   });
 });
 
-// Middleware untuk memeriksa apakah request adalah request publik
-const checkPublicRequest = (req, res, next) => {
-  // Jika request memiliki header X-Public-Request, bypass verifikasi token
-  if (req.headers['x-public-request'] === 'true' ||
-      req.path === '/with-sublabels' ||
-      req.path === '/slug' ||
-      req.path.startsWith('/slug/')) {
-    logger.info('Public request detected, bypassing token verification', {
-      path: req.path,
-      headers: req.headers['x-public-request']
-    });
-    return next();
-  }
-
-  // Jika bukan request publik, verifikasi token
-  verifyToken(req, res, next);
-};
-
 app.use('/api/labels',
   // Rate limiter dihapus untuk menghindari tumpang tindih
-  checkPublicRequest,
+  verifyToken,
   labelsRouter
 );
 
 app.use('/api/search', searchRoutes);
-
-// Middleware untuk memeriksa apakah request posts adalah request publik
-const checkPostsPublicRequest = (req, res, next) => {
-  // Jika request memiliki header X-Public-Request, bypass verifikasi token
-  if (req.headers['x-public-request'] === 'true' ||
-      req.path.startsWith('/public/') ||
-      req.path.startsWith('/label/') ||
-      req.path.startsWith('/by-label-id/') ||
-      req.path.startsWith('/by-label-slug/') ||
-      req.path === '/' ||
-      req.path === '/featured' ||
-      req.path === '/spotlight' ||
-      req.path === '/popular') {
-    logger.info('Public posts request detected, bypassing token verification', {
-      path: req.path,
-      headers: req.headers['x-public-request']
-    });
-    return next();
-  }
-
-  // Jika bukan request publik, verifikasi token
-  verifyToken(req, res, next);
-};
 
 app.use('/api/posts',
   (req, res, next) => {
@@ -475,24 +393,12 @@ app.use('/api/posts',
     });
     next();
   },
-  checkPostsPublicRequest,
   postsRouter
 );
 
 app.use('/api/upload', uploadRoutes);
 
 app.use('/api/carousel', carouselRoutes);
-app.use('/api/carousel-post', carouselPostRoutes);
-
-// Comments and Likes routes
-app.use('/api/comments', commentsRouter);
-app.use('/api/likes', likesRouter);
-
-// Dashboard route
-app.use('/api/dashboard', dashboardRouter);
-
-// Static Pages route
-app.use('/api/static-pages', staticPagesRouter);
 
 // Utility routes
 // Endpoint CSRF token dihapus dari server.js dan dikonsolidasikan ke authRoutes.js
@@ -605,82 +511,233 @@ app.use((req, res, next) => {
   next();
 });
 
+app.use((req, res, next) => {
+  res.on('finish', () => {
+    if (res.statusCode === 401 || res.statusCode === 403) {
+      logger.warn(`Failed authentication attempt: ${req.method} ${req.originalUrl}`);
+    }
+  });
+  next();
+});
+
 // Error handling middleware
 app.use((err, req, res, next) => {
   logger.error('Error details:', {
     message: err.message,
     stack: err.stack,
-    path: req.path,
+    url: req.url,
     method: req.method,
-    body: req.method === 'POST' || req.method === 'PUT' ? req.body : undefined
+    headers: {
+      origin: req.headers.origin,
+      referer: req.headers.referer
+    }
   });
 
-  // Jika error adalah AppError, gunakan status code dan pesan yang sudah ditentukan
+  // Error mapping untuk berbagai tipe error
+  const errorMap = {
+    TokenExpiredError: {
+      message: 'Token telah kadaluarsa',
+      code: 'TOKEN_EXPIRED',
+      status: 401
+    },
+    JsonWebTokenError: {
+      message: 'Token tidak valid',
+      code: 'INVALID_TOKEN',
+      status: 401
+    },
+    TokenRefreshError: {
+      message: 'Gagal memperbarui token, silakan login kembali',
+      code: 'REFRESH_FAILED',
+      status: 401
+    },
+    EBADCSRFTOKEN: {
+      message: 'Invalid CSRF token, silakan refresh halaman',
+      code: 'INVALID_CSRF',
+      status: 403
+    },
+    MulterError: {
+      LIMIT_FILE_SIZE: {
+        message: 'File terlalu besar. Maksimum 5MB',
+        code: 'FILE_TOO_LARGE',
+        status: 400
+      },
+      default: {
+        message: 'Error saat upload file',
+        code: 'UPLOAD_ERROR',
+        status: 400
+      }
+    },
+    // Tambahkan penanganan error untuk koneksi database
+    ER_USER_LIMIT_REACHED: {
+      message: 'Terlalu banyak koneksi database, coba lagi nanti',
+      code: 'DB_CONNECTION_LIMIT',
+      status: 503
+    },
+    ECONNREFUSED: {
+      message: 'Tidak dapat terhubung ke database, coba lagi nanti',
+      code: 'DB_CONNECTION_REFUSED',
+      status: 503
+    },
+    ETIMEDOUT: {
+      message: 'Koneksi database timeout, coba lagi nanti',
+      code: 'DB_CONNECTION_TIMEOUT',
+      status: 503
+    },
+    PROTOCOL_CONNECTION_LOST: {
+      message: 'Koneksi database terputus, coba lagi nanti',
+      code: 'DB_CONNECTION_LOST',
+      status: 503
+    }
+  };
+
+  // Handle specific errors
   if (err instanceof AppError) {
-    return res.status(err.statusCode).json({
-      success: false,
-      message: err.message,
-      error: err.name,
-      stack: process.env.NODE_ENV === 'production' ? undefined : err.stack
-    });
+    return handleError(err, req, res);
   }
 
-  // Jika error adalah CSRF, berikan pesan yang lebih jelas
-  if (err.code === 'EBADCSRFTOKEN') {
-    return res.status(403).json({
-      success: false,
-      message: 'Invalid CSRF token. Silakan refresh halaman dan coba lagi.',
-      error: 'CSRF Error'
-    });
-  }
-
-  // Jika error adalah ValidationError dari express-validator, berikan pesan yang lebih jelas
-  if (err.array && typeof err.array === 'function') {
-    const validationErrors = err.array();
-    return res.status(400).json({
-      success: false,
-      message: 'Validation error',
-      errors: validationErrors
-    });
-  }
-
-  // Jika error adalah SyntaxError dari JSON parsing, berikan pesan yang lebih jelas
-  if (err instanceof SyntaxError && err.status === 400 && 'body' in err) {
-    return res.status(400).json({
-      success: false,
-      message: 'Invalid JSON',
-      error: 'SyntaxError',
-      details: err.message
-    });
-  }
-
-  // Jika error adalah MulterError, berikan pesan yang lebih jelas
+  // Handle Multer errors
   if (err.name === 'MulterError') {
-    return res.status(400).json({
+    const multerError = errorMap.MulterError[err.code] || errorMap.MulterError.default;
+    return res.status(multerError.status).json({
       success: false,
-      message: `File upload error: ${err.message}`,
-      error: err.name,
-      code: err.code
+      ...multerError
     });
   }
 
-  // Jika error adalah JsonWebTokenError, berikan pesan yang lebih jelas
-  if (err.name === 'JsonWebTokenError' || err.name === 'TokenExpiredError') {
-    return res.status(401).json({
+  // Handle mapped errors
+  const mappedError = errorMap[err.name || err.code];
+  if (mappedError) {
+    return res.status(mappedError.status).json({
       success: false,
-      message: 'Invalid or expired token. Please login again.',
-      error: err.name
+      ...mappedError
     });
   }
 
-  // Default error response
-  const statusCode = err.statusCode || 500;
-  res.status(statusCode).json({
+  // Default error
+  return res.status(500).json({
     success: false,
-    message: err.message || 'Internal Server Error',
-    error: err.name || 'Error',
-    stack: process.env.NODE_ENV === 'production' ? undefined : err.stack
+    message: 'Terjadi kesalahan internal server',
+    code: 'SERVER_ERROR'
   });
+});
+
+// Graceful shutdown function
+const gracefulShutdown = async (server) => {
+  logger.info('Received shutdown signal');
+
+  // Berhenti menerima koneksi baru
+  server.close(async () => {
+    logger.info('Server stopped accepting new connections');
+
+    try {
+      // Cleanup resources
+      logger.info('Cleaning up resources...');
+
+      // Close Redis connection
+      if (redis) {
+        await redis.quit();
+        logger.info('Redis connection closed');
+      }
+
+      // Close database pool
+      if (pool) {
+        await pool.end();
+        logger.info('Database pool closed');
+      }
+
+      // Remove temporary files
+      const uploadsPath = path.join(__dirname, 'uploads/temp');
+      if (fs.existsSync(uploadsPath)) {
+        fs.rmdirSync(uploadsPath, { recursive: true });
+        logger.info('Temporary files cleaned up');
+      }
+
+      logger.info('Cleanup completed, shutting down process');
+      process.exit(0);
+    } catch (error) {
+      logger.error('Error during cleanup:', error);
+      process.exit(1);
+    }
+  });
+
+  // Force shutdown after timeout
+  setTimeout(() => {
+    logger.error('Could not close connections in time, forcefully shutting down');
+    process.exit(1);
+  }, 10000); // 10 seconds
+};
+
+// Server startup with enhanced error handling
+async function startServer() {
+  try {
+    // Test database connection
+    await executeQuery(async (connection) => {
+      await connection.query('SELECT 1');
+    });
+    logger.info('Database connection successful');
+
+    // Cek permission uploads folder
+    const permissionsOk = await checkUploadPermissions();
+    if (!permissionsOk) {
+      logger.error('Upload directory permissions not correct - please fix!');
+      // Optional: process.exit(1);
+    }
+
+    // Start server
+    const server = app.listen(PORT, () => {
+      const actualPort = server.address().port;
+      logger.info(`Server running on port ${actualPort}`);
+
+      // Update environment variables if port was auto-assigned
+      if (PORT === 0 || PORT === '0') {
+        process.env.PORT = actualPort.toString();
+        process.env.BASE_URL = `http://localhost:${actualPort}`;
+        process.env.API_URL = `http://localhost:${actualPort}`;
+        logger.info(`Auto-assigned port: ${actualPort}. Updated BASE_URL and API_URL to http://localhost:${actualPort}`);
+      }
+
+      if (!isProduction) {
+        console.log('Available routes:');
+        app._router.stack.forEach(r => {
+          if (r.route && r.route.path) {
+            console.log(`${Object.keys(r.route.methods)} ${r.route.path}`);
+          }
+        });
+      }
+
+      // Mulai cleanup token setiap 2 jam
+      // Nonaktifkan sementara untuk menghindari error
+      // startCleanupSchedule(2 * 60 * 60 * 1000);
+    });
+
+    // Setup shutdown handlers
+    const shutdownHandler = () => gracefulShutdown(server);
+    process.on('SIGTERM', shutdownHandler);
+    process.on('SIGINT', shutdownHandler);
+
+    return server;
+  } catch (error) {
+    logger.error('Failed to start server:', error);
+    throw new AppError('Failed to start server', 500);
+  }
+}
+
+// Global error handlers
+process.on('unhandledRejection', (reason, promise) => {
+  logger.error('Unhandled Rejection:', {
+    reason: reason instanceof Error ? reason.stack : reason,
+    promise: promise
+  });
+  // Tidak langsung exit, biarkan graceful shutdown handle
+  process.emit('SIGTERM');
+});
+
+process.on('uncaughtException', (error) => {
+  logger.error('Uncaught Exception:', {
+    error: error.stack
+  });
+  // Tidak langsung exit, biarkan graceful shutdown handle
+  process.emit('SIGTERM');
 });
 
 // Tambahkan middleware untuk debugging routes
@@ -695,7 +752,7 @@ app.get('/api/health', (req, res) => {
     status: 'ok',
     timestamp: new Date().toISOString(),
     environment: process.env.NODE_ENV,
-    version: process.env.npm_package_version || '1.0.0'
+    version: '1.0.0'
   });
 });
 
@@ -704,16 +761,13 @@ app.get('/api/posts/fallback', (req, res) => {
   res.json({
     success: true,
     message: 'Fallback data returned due to database connection issues',
-    posts: [
-      {
-        id: 'fallback-1',
-        title: 'Artikel Sementara',
-        content: 'Konten artikel sementara. Silakan coba lagi nanti.',
-        status: 'published',
-        created_at: new Date().toISOString(),
-        author: 'System'
-      }
-    ]
+    data: [],
+    pagination: {
+      currentPage: 1,
+      totalPages: 0,
+      totalItems: 0,
+      limit: 10
+    }
   });
 });
 
@@ -725,13 +779,15 @@ app.get('/api/db-connection', (req, res) => {
     database: process.env.DB_NAME || 'Not set',
     user: process.env.DB_USER ? `${process.env.DB_USER.substring(0, 2)}...` : 'Not set',
     port: process.env.DB_PORT || '3306',
-    ssl: process.env.DB_SSL === 'true' ? 'enabled' : 'disabled'
+    ssl: process.env.DB_SSL === 'true' ? 'enabled' : 'disabled',
+    redis_enabled: process.env.REDIS_ENABLED || 'true',
+    vercel: process.env.VERCEL || 'Not set'
   };
 
   res.json({
-    success: true,
     message: 'Database connection info',
     connection: dbInfo,
+    env: process.env.NODE_ENV,
     timestamp: new Date().toISOString()
   });
 });
@@ -741,15 +797,17 @@ app.get('/api/db-test', async (req, res) => {
   try {
     console.log('Database test endpoint called');
     console.log('Environment variables:', {
-      DB_HOST: process.env.DB_HOST ? `${process.env.DB_HOST.substring(0, 4)}...` : 'Not set',
-      DB_NAME: process.env.DB_NAME || 'Not set',
-      DB_USER: process.env.DB_USER ? `${process.env.DB_USER.substring(0, 2)}...` : 'Not set',
+      DB_HOST: process.env.DB_HOST ? 'Set (hidden)' : 'Not set',
+      DB_USER: process.env.DB_USER ? 'Set (hidden)' : 'Not set',
+      DB_PASSWORD: process.env.DB_PASSWORD ? 'Set (hidden)' : 'Not set',
+      DB_NAME: process.env.DB_NAME ? 'Set (hidden)' : 'Not set',
       DB_PORT: process.env.DB_PORT || '3306',
-      DB_SSL: process.env.DB_SSL
+      DB_SSL: process.env.DB_SSL || 'false',
+      NODE_ENV: process.env.NODE_ENV
     });
 
-    // Periksa apakah semua variabel lingkungan yang diperlukan ada
-    const requiredEnvVars = ['DB_HOST', 'DB_NAME', 'DB_USER', 'DB_PASSWORD'];
+    // Periksa apakah variabel lingkungan database sudah diatur
+    const requiredEnvVars = ['DB_HOST', 'DB_USER', 'DB_PASSWORD', 'DB_NAME'];
     const missingVars = requiredEnvVars.filter(varName => !process.env[varName]);
 
     if (missingVars.length > 0) {
@@ -794,15 +852,6 @@ app.get('/api/db-test', async (req, res) => {
 // Fungsi untuk memulai server dengan port cleanup
 const startServer = async () => {
   try {
-    // Log informasi database yang digunakan
-    console.log('\n==== DATABASE CONNECTION INFO ====');
-    console.log(`Host: ${process.env.DB_HOST}`);
-    console.log(`Port: ${process.env.DB_PORT}`);
-    console.log(`Database: ${process.env.DB_NAME}`);
-    console.log(`User: ${process.env.DB_USER}`);
-    console.log(`SSL: ${process.env.DB_SSL === 'true' ? 'Enabled' : 'Disabled'}`);
-    console.log('==================================\n');
-
     // Coba bersihkan port jika sudah digunakan
     const portCleaned = await cleanupPort(PORT);
     if (!portCleaned) {
@@ -836,42 +885,35 @@ const startServer = async () => {
         console.log('Available routes:');
         const routes = [];
 
-        app._router.stack.forEach((middleware) => {
-          if (middleware.route) {
-            // Routes registered directly on the app
-            const methods = Object.keys(middleware.route.methods)
-              .filter(method => middleware.route.methods[method])
-              .join(', ').toUpperCase();
-            routes.push(`${methods} ${middleware.route.path}`);
-          } else if (middleware.name === 'router') {
-            // Router middleware
-            middleware.handle.stack.forEach((handler) => {
-              if (handler.route) {
-                const methods = Object.keys(handler.route.methods)
-                  .filter(method => handler.route.methods[method])
-                  .join(', ').toUpperCase();
-                let path = handler.route.path;
-                if (middleware.regexp) {
-                  // Extract the base path from the router
-                  const match = middleware.regexp.toString().match(/^\/\^\\\/([^\\]+)/);
-                  if (match) {
-                    path = '/' + match[1] + path;
-                  }
-                }
-                routes.push(`${methods} ${path}`);
-              }
-            });
+  app._router.stack.forEach((middleware) => {
+    if (middleware.route) {
+      // Routes registered directly on the app
+      const methods = Object.keys(middleware.route.methods)
+        .filter(method => middleware.route.methods[method])
+        .join(', ').toUpperCase();
+      routes.push(`${methods} ${middleware.route.path}`);
+    } else if (middleware.name === 'router') {
+      // Router middleware
+      middleware.handle.stack.forEach((handler) => {
+        if (handler.route) {
+          const methods = Object.keys(handler.route.methods)
+            .filter(method => handler.route.methods[method])
+            .join(', ').toUpperCase();
+          let path = handler.route.path;
+          if (middleware.regexp) {
+            // Extract the base path from the router
+            const match = middleware.regexp.toString().match(/^\/\^\\\/([^\\]+)/);
+            if (match) {
+              path = '/' + match[1] + path;
+            }
           }
-        });
-
-        routes.forEach(route => console.log(route));
-        resolve(server);
+          routes.push(`${methods} ${path}`);
+        }
       });
-    });
-  } catch (error) {
-    logger.error(`Error starting server: ${error.message}`, { service: 'server-startup', stack: error.stack });
-    throw error;
-  }
-};
+    }
+  });
+
+  routes.forEach(route => console.log(route));
+});
 
 module.exports = { app, startServer };

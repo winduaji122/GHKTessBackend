@@ -18,5 +18,6 @@ router.post('/', verifyToken, isAdmin, upload.single('image'), carouselControlle
 router.put('/:id', verifyToken, isAdmin, upload.single('image'), carouselController.updateSlide);
 router.delete('/:id', verifyToken, isAdmin, carouselController.deleteSlide);
 router.post('/order', verifyToken, isAdmin, carouselController.updateSlidesOrder);
+router.post('/replace/:slideId', verifyToken, isAdmin, carouselController.replaceSlideWithPost);
 
 module.exports = router;

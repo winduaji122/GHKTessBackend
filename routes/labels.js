@@ -16,6 +16,26 @@ router.get('/', async (req, res) => {
   }
 });
 
+// Mendapatkan label dengan struktur sublabel
+router.get('/with-sublabels', async (req, res) => {
+  try {
+    await labelController.getLabelsWithSublabels(req, res);
+  } catch (error) {
+    logger.error('Error in GET /labels/with-sublabels:', error);
+    res.status(500).json({ message: 'Terjadi kesalahan saat mengambil label dengan sublabel.' });
+  }
+});
+
+// Mendapatkan label berdasarkan slug
+router.get('/slug/:slug', async (req, res) => {
+  try {
+    await labelController.getLabelBySlug(req, res);
+  } catch (error) {
+    logger.error('Error in GET /labels/slug/:slug:', error);
+    res.status(500).json({ message: 'Terjadi kesalahan saat mengambil label berdasarkan slug.' });
+  }
+});
+
 // Membuat label baru (hanya untuk admin)
 router.post('/', isAuthenticated, isAdmin, async (req, res) => {
   try {

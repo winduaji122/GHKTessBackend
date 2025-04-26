@@ -6,6 +6,7 @@ const path = require('path');
 const moment = require('moment');
 const fs = require('fs').promises;
 const sharp = require('sharp');
+const crypto = require('crypto');
 const { validatePostUpdate, handleValidationErrors } = require('../middleware/validationMiddleware');
 const { isAdminOrWriter, isAdminOrAuthor } = require('../middleware/authMiddleware');
 const { deleteFile } = require('../uploadConfig');
@@ -33,7 +34,8 @@ exports.getAllPosts = async (req, res) => {
       label_id = null,
       sort = 'created_at:desc',
       featured = 'all',
-      search = ''
+      search = '',
+      user_role = null // Tambahkan parameter user_role
     } = req.query;
 
     let whereConditions = [];
@@ -54,6 +56,12 @@ exports.getAllPosts = async (req, res) => {
         )
       `);
       params.push(label_id);
+    }
+
+    // Filter by user role (admin atau writer)
+    if (user_role) {
+      whereConditions.push('u.role = ?');
+      params.push(user_role);
     }
 
     // Filter featured/spotlight/regular
@@ -125,100 +133,91 @@ exports.getAllPosts = async (req, res) => {
       ${whereConditions.length ? 'WHERE ' + whereConditions.join(' AND ') : ''}
     `;
 
-    // Gunakan koneksi langsung dari db
-    let connection;
     try {
-      // Tambahkan timeout untuk mendapatkan koneksi
-      const getConnectionPromise = db.getConnection();
-      const timeoutPromise = new Promise((_, reject) => {
-        setTimeout(() => reject(new Error('Connection acquisition timeout')), 5000);
-      });
+      // Gunakan executeQuery untuk menjalankan query dengan koneksi yang dikelola dengan baik
+      const result = await db.executeQuery(async (connection) => {
+        // Eksekusi query utama
+        const [postsResult] = await connection.query(query, queryParams);
+        const [count] = await connection.query(countQuery, params);
 
-      try {
-        connection = await Promise.race([getConnectionPromise, timeoutPromise]);
-      } catch (connError) {
-        logger.error('Failed to acquire connection in getAllPosts:', {
-          error: connError.message,
-          stack: connError.stack,
-          service: 'database-service'
+        // Jika tidak ada hasil, kembalikan array kosong
+        if (postsResult.length === 0) {
+          return {
+            success: true,
+            data: [],
+            pagination: {
+              currentPage: parseInt(page),
+              totalPages: 0,
+              totalItems: 0,
+              limit: parseInt(limit)
+            }
+          };
+        }
+
+        // Ambil label secara terpisah untuk mengurangi kompleksitas query
+        const postIds = postsResult.map(post => post.id);
+        let labels = [];
+
+        if (postIds.length > 0) {
+          const [labelRows] = await connection.query(`
+            SELECT
+              pl.post_id,
+              ul.id,
+              ul.label,
+              ul.parent_id,
+              parent.label as parent_label
+            FROM post_labels pl
+            JOIN unique_labels ul ON pl.label_id = ul.id
+            LEFT JOIN unique_labels parent ON ul.parent_id = parent.id
+            WHERE pl.post_id IN (?)
+          `, [postIds]);
+
+          labels = labelRows;
+        }
+
+        // Format response dengan label yang diambil secara terpisah
+        const formattedPosts = postsResult.map(post => {
+          const postLabels = labels
+            .filter(label => label.post_id === post.id)
+            .map(label => ({
+              id: label.id,
+              label: label.label,
+              parent_id: label.parent_id,
+              parent_label: label.parent_label
+            }));
+
+          return {
+            ...post,
+            is_spotlight: Boolean(post.is_spotlight),
+            is_featured: Boolean(post.is_featured),
+            labels: postLabels || []
+          };
         });
-
-        // Gunakan fallback data untuk error koneksi database
-        logger.warn('Using fallback data for getAllPosts due to connection error');
-        return res.status(200).json(FALLBACK_POSTS);
-      }
-
-      // Eksekusi query utama
-      const [postsResult] = await connection.query(query, queryParams);
-      const [count] = await connection.query(countQuery, params);
-
-      // Jika tidak ada hasil, kembalikan array kosong
-      if (postsResult.length === 0) {
-        return res.json({
-          success: true,
-          data: [],
-          pagination: {
-            currentPage: parseInt(page),
-            totalPages: 0,
-            totalItems: 0,
-            limit: parseInt(limit)
-          }
-        });
-      }
-
-      // Ambil label secara terpisah untuk mengurangi kompleksitas query
-      const postIds = postsResult.map(post => post.id);
-      let labels = [];
-
-      if (postIds.length > 0) {
-        const [labelRows] = await connection.query(`
-          SELECT pl.post_id, ul.id, ul.label
-          FROM post_labels pl
-          JOIN unique_labels ul ON pl.label_id = ul.id
-          WHERE pl.post_id IN (?)
-        `, [postIds]);
-
-        labels = labelRows;
-      }
-
-      // Format response dengan label yang diambil secara terpisah
-      const formattedPosts = postsResult.map(post => {
-        const postLabels = labels
-          .filter(label => label.post_id === post.id)
-          .map(label => ({ id: label.id, label: label.label }));
 
         return {
-          ...post,
-          is_spotlight: Boolean(post.is_spotlight),
-          is_featured: Boolean(post.is_featured),
-          labels: postLabels || []
+          success: true,
+          data: formattedPosts,
+          pagination: {
+            currentPage: parseInt(page),
+            totalPages: Math.ceil(count[0].total / parseInt(limit)),
+            totalItems: count[0].total,
+            limit: parseInt(limit)
+          }
         };
       });
 
-      res.json({
-        success: true,
-        data: formattedPosts,
-        pagination: {
-          currentPage: parseInt(page),
-          totalPages: Math.ceil(count[0].total / parseInt(limit)),
-          totalItems: count[0].total,
-          limit: parseInt(limit)
-        }
-      });
-    } catch (error) {
+      // Kirim hasil ke client
+      return res.json(result);
+    } catch (dbError) {
       logger.error('Database error in getAllPosts:', {
-        error: error.message,
-        stack: error.stack
+        error: dbError.message,
+        stack: dbError.stack,
+        service: 'database-service'
       });
-      throw error;
-    } finally {
-      // Pastikan koneksi selalu dilepas
-      try {
-        connection.release();
-        logger.info('Connection released in getAllPosts');
-      } catch (releaseError) {
-        logger.error('Error releasing connection in getAllPosts:', releaseError);
-      }
+
+      // Gunakan fallback data untuk error database
+      logger.warn('Using fallback data for getAllPosts due to database error');
+      return res.status(200).json(FALLBACK_POSTS);
     }
   } catch (error) {
     logger.error('Error getting posts:', {
@@ -248,59 +247,74 @@ exports.getPostById = async (req, res) => {
   try {
     const { id } = req.params;
 
-    // Gunakan koneksi langsung dari db
-    const connection = await db.getConnection();
     try {
-      // Query untuk mendapatkan post dan informasi dasar
-      const [rows] = await connection.query(`
-        SELECT
-          p.*,
-          u.name as author_name,
-          u.email as author_email
-        FROM posts p
-        LEFT JOIN users u ON p.author_id = u.id
-        WHERE p.id = ?
-      `, [id]);
+      // Gunakan executeQuery untuk menjalankan query dengan koneksi yang dikelola dengan baik
+      const result = await db.executeQuery(async (connection) => {
+        // Query untuk mendapatkan post dan informasi dasar
+        const [rows] = await connection.query(`
+          SELECT
+            p.*,
+            u.name as author_name,
+            u.email as author_email
+          FROM posts p
+          LEFT JOIN users u ON p.author_id = u.id
+          WHERE p.id = ?
+        `, [id]);
 
-      const post = rows[0];
+        const post = rows[0];
 
-      if (!post) {
+        if (!post) {
+          return null;
+        }
+
+        // Query terpisah untuk mendapatkan label dengan informasi parent
+        const [labelRows] = await connection.query(`
+          SELECT
+            ul.id,
+            ul.label,
+            ul.parent_id,
+            parent.label as parent_label
+          FROM post_labels pl
+          JOIN unique_labels ul ON pl.label_id = ul.id
+          LEFT JOIN unique_labels parent ON ul.parent_id = parent.id
+          WHERE pl.post_id = ?
+        `, [post.id]);
+
+        // Format response dengan data yang diambil secara terpisah
+        return {
+          ...post,
+          image: post.image ? formatImageUrl(post.image) : null,
+          thumbnail: post.thumbnail ? formatImageUrl(post.thumbnail) : null,
+          labels: labelRows || [],
+          is_featured: Boolean(post.is_featured),
+          is_spotlight: Boolean(post.is_spotlight),
+          author: {
+            name: post.author_name,
+            email: post.author_email
+          }
+        };
+      });
+
+      if (!result) {
         return res.status(404).json({
           success: false,
           message: 'Post tidak ditemukan'
         });
       }
 
-      // Query terpisah untuk mendapatkan label
-      const [labelRows] = await connection.query(`
-        SELECT ul.id, ul.label
-        FROM post_labels pl
-        JOIN unique_labels ul ON pl.label_id = ul.id
-        WHERE pl.post_id = ?
-      `, [post.id]);
-
-      // Format response dengan data yang diambil secara terpisah
-      const formattedPost = {
-        ...post,
-        image: post.image ? formatImageUrl(post.image) : null,
-        thumbnail: post.thumbnail ? formatImageUrl(post.thumbnail) : null,
-        labels: labelRows || [],
-        is_featured: Boolean(post.is_featured),
-        is_spotlight: Boolean(post.is_spotlight),
-        author: {
-          name: post.author_name,
-          email: post.author_email
-        }
-      };
-
       return res.json({
         success: true,
-        data: formattedPost
+        data: result
       });
-    } catch (error) {
-      throw error;
-    } finally {
-      connection.release();
+    } catch (dbError) {
+      logger.error('Database error in getPostById:', {
+        error: dbError.message,
+        stack: dbError.stack,
+        service: 'database-service',
+        id: req.params.id
+      });
+
+      throw dbError;
     }
   } catch (error) {
     logger.error('Error dalam getPostById:', {
@@ -338,7 +352,7 @@ exports.createPost = async (req, res) => {
     console.log('User role:', req.user.role);
 
     // Dapatkan data dari request
-    const { title, content, status, publish_date, excerpt, is_featured, is_spotlight, labels } = req.body;
+    const { title, content, status, publish_date, excerpt, is_featured, is_spotlight, labels, tags, allow_comments } = req.body;
 
     // Validasi data
     if (!title || !content) {
@@ -355,7 +369,9 @@ exports.createPost = async (req, res) => {
       content,
       user_id: req.user.id,
       publish_date: publish_date || new Date(),
-      excerpt: excerpt || generateExcerpt(content)
+      excerpt: excerpt || generateExcerpt(content),
+      tags: tags || '',
+      allow_comments: allow_comments === '1' || allow_comments === true || allow_comments === undefined ? 1 : 0
     };
 
     // Penyesuaian berdasarkan role
@@ -473,6 +489,82 @@ const generateSlug = (title) => {
     .replace(/^-+|-+$/g, '');
 };
 
+/**
+ * Mendapatkan post populer berdasarkan jumlah views
+ * @param {Object} req - Express request object
+ * @param {Object} res - Express response object
+ */
+exports.getPopularPosts = async (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit) || 6;
+
+    // Gunakan executeQuery untuk menjalankan query dengan koneksi yang dikelola dengan baik
+    const result = await db.executeQuery(async (connection) => {
+      // Query untuk mendapatkan post populer berdasarkan jumlah views
+      const query = `
+        SELECT p.*,
+               COUNT(pv.id) as views,
+               u.name as author_name,
+               u.profile_picture as author_profile_picture
+        FROM posts p
+        LEFT JOIN post_views pv ON p.id = pv.post_id
+        LEFT JOIN users u ON p.author_id = u.id
+        WHERE p.status = 'published'
+          AND p.deleted_at IS NULL
+        GROUP BY p.id
+        ORDER BY views DESC, p.publish_date DESC
+        LIMIT ?
+      `;
+
+      const [posts] = await connection.query(query, [limit]);
+
+      if (posts.length === 0) {
+        return [];
+      }
+
+      // Ambil semua post IDs
+      const postIds = posts.map(post => post.id);
+
+      // Ambil semua labels untuk semua posts dalam satu query
+      const [allLabels] = await connection.query(
+        `SELECT pl.post_id, ul.id, ul.label as name, ul.parent_id
+         FROM post_labels pl
+         JOIN unique_labels ul ON pl.label_id = ul.id
+         WHERE pl.post_id IN (?)`,
+        [postIds]
+      );
+
+      // Map labels ke posts
+      const postsWithLabels = posts.map(post => {
+        const postLabels = allLabels.filter(label => label.post_id === post.id);
+        return {
+          ...post,
+          labels: postLabels
+        };
+      });
+
+      return postsWithLabels;
+    });
+
+    return res.status(200).json({
+      success: true,
+      data: result
+    });
+
+  } catch (error) {
+    logger.error('Error getting popular posts:', {
+      error: error.message,
+      stack: error.stack
+    });
+
+    return res.status(500).json({
+      success: false,
+      message: 'Terjadi kesalahan saat mengambil post populer',
+      error: error.message
+    });
+  }
+};
+
 // Fungsi untuk menghasilkan slug unik
 const generateUniqueSlug = async (title) => {
   const baseSlug = generateSlug(title);
@@ -538,10 +630,10 @@ exports.updatePost = async (req, res) => {
     console.log('User role:', req.user.role);
 
     const { id } = req.params;
-    const { title, content, status, publish_date, excerpt, is_featured, is_spotlight, labels } = req.body;
+    const { title, content, status, publish_date, excerpt, is_featured, is_spotlight, labels, tags, allow_comments } = req.body;
 
     // Cari post yang akan diupdate
-    const post = await Post.findByPk(id);
+    const post = await Post.getFullPostById(id);
 
     if (!post) {
       return res.status(404).json({
@@ -551,7 +643,7 @@ exports.updatePost = async (req, res) => {
     }
 
     // Validasi akses
-    if (post.user_id !== req.user.id && req.user.role !== 'admin') {
+    if (post.author_id !== req.user.id && req.user.role !== 'admin') {
       return res.status(403).json({
         success: false,
         message: 'You are not authorized to update this post'
@@ -562,7 +654,9 @@ exports.updatePost = async (req, res) => {
     const updateData = {
       title: title || post.title,
       content: content || post.content,
-      excerpt: excerpt !== undefined ? excerpt : post.excerpt
+      excerpt: excerpt !== undefined ? excerpt : post.excerpt,
+      tags: tags !== undefined ? tags : post.tags,
+      allow_comments: allow_comments !== undefined ? (allow_comments === '1' || allow_comments === true ? 1 : 0) : post.allow_comments
     };
 
     // Penyesuaian berdasarkan role
@@ -599,9 +693,9 @@ exports.updatePost = async (req, res) => {
 
     console.log('Post data to be updated:', updateData);
 
-    // Update post
-    await post.update(updateData);
-    console.log('Post updated with ID:', post.id);
+    // Update post menggunakan method updatePost
+    await Post.updatePost(id, updateData);
+    console.log('Post updated with ID:', id);
 
     // Update labels jika ada
     if (labels) {
@@ -636,7 +730,7 @@ exports.updatePost = async (req, res) => {
 
         if (labelIds.length > 0) {
           console.log('Setting labels for post:', labelIds);
-          await post.setLabels(labelIds);
+          await PostLabel.updateLabelsForPost(id, labelIds);
         }
       } catch (error) {
         console.error('Error setting labels:', error);
@@ -644,12 +738,7 @@ exports.updatePost = async (req, res) => {
     }
 
     // Ambil post yang sudah diupdate dengan labels
-    const updatedPost = await Post.findByPk(post.id, {
-      include: [
-        { model: User, as: 'author', attributes: ['id', 'name'] },
-        { model: Label, as: 'labels', through: { attributes: [] } }
-      ]
-    });
+    const updatedPost = await Post.getFullPostById(id);
 
     return res.status(200).json({
       success: true,
@@ -874,79 +963,94 @@ const FALLBACK_SPOTLIGHT_POSTS = {
 };
 
 exports.getSpotlightPosts = async (req, res) => {
-  let connection;
   try {
     logger.info('Fetching spotlight posts');
 
-    // Gunakan koneksi langsung dari db
     try {
-      connection = await db.getConnection();
-    } catch (connError) {
-      logger.error('Failed to acquire connection in getSpotlightPosts:', {
-        error: connError.message,
-        stack: connError.stack,
+      // Gunakan executeQuery untuk menjalankan query dengan koneksi yang dikelola dengan baik
+      const result = await db.executeQuery(async (connection) => {
+        // Query untuk mengambil spotlight posts - gunakan query yang lebih sederhana
+        const [posts] = await connection.query(`
+          SELECT
+            p.id, p.title, p.slug, p.content, p.image, p.status,
+            p.created_at, p.updated_at, p.is_featured, p.is_spotlight,
+            u.name as author_name,
+            u.email as author_email
+          FROM posts p
+          LEFT JOIN users u ON p.author_id = u.id
+          WHERE p.is_spotlight = 1
+            AND p.deleted_at IS NULL
+            AND p.status = 'published'
+          ORDER BY p.created_at DESC
+          LIMIT 6
+        `);
+
+        // Jika tidak ada hasil, kembalikan array kosong
+        if (posts.length === 0) {
+          return {
+            success: true,
+            data: [],
+            pagination: {
+              currentPage: 1,
+              totalPages: 0,
+              totalItems: 0
+            }
+          };
+        }
+
+        // Ambil label secara terpisah untuk mengurangi kompleksitas query
+        const postIds = posts.map(post => post.id);
+        let labels = [];
+
+        if (postIds.length > 0) {
+          const [labelRows] = await connection.query(`
+            SELECT pl.post_id, ul.id, ul.label
+            FROM post_labels pl
+            JOIN unique_labels ul ON pl.label_id = ul.id
+            WHERE pl.post_id IN (?)
+          `, [postIds]);
+
+          labels = labelRows;
+        }
+
+        // Format response
+        const formattedPosts = posts.map(post => {
+          const postLabels = labels
+            .filter(label => label.post_id === post.id)
+            .map(label => ({ id: label.id, label: label.label }));
+
+          return {
+            ...post,
+            is_spotlight: Boolean(post.is_spotlight),
+            is_featured: Boolean(post.is_featured),
+            labels: postLabels || []
+          };
+        });
+
+        return {
+          success: true,
+          data: formattedPosts,
+          pagination: {
+            currentPage: 1,
+            totalPages: 1,
+            totalItems: formattedPosts.length
+          }
+        };
+      });
+
+      // Kirim hasil ke client
+      return res.json(result);
+    } catch (dbError) {
+      logger.error('Database error in getSpotlightPosts:', {
+        error: dbError.message,
+        stack: dbError.stack,
         service: 'database-service'
       });
 
-      // Gunakan fallback data untuk error koneksi database
-      logger.warn('Using fallback data for getSpotlightPosts due to connection error');
+      // Gunakan fallback data untuk error database
+      logger.warn('Using fallback data for getSpotlightPosts due to database error');
       return res.status(200).json(FALLBACK_SPOTLIGHT_POSTS);
     }
-
-    // Query untuk mengambil spotlight posts - gunakan query yang lebih sederhana
-    const [posts] = await connection.query(`
-      SELECT
-        p.id, p.title, p.slug, p.content, p.image, p.status,
-        p.created_at, p.updated_at, p.is_featured, p.is_spotlight,
-        u.name as author_name,
-        u.email as author_email
-      FROM posts p
-      LEFT JOIN users u ON p.author_id = u.id
-      WHERE p.is_spotlight = 1
-        AND p.deleted_at IS NULL
-        AND p.status = 'published'
-      ORDER BY p.created_at DESC
-      LIMIT 6
-    `);
-
-    // Ambil label secara terpisah untuk mengurangi kompleksitas query
-    const postIds = posts.map(post => post.id);
-    let labels = [];
-
-    if (postIds.length > 0) {
-      const [labelRows] = await connection.query(`
-        SELECT pl.post_id, ul.id, ul.label
-        FROM post_labels pl
-        JOIN unique_labels ul ON pl.label_id = ul.id
-        WHERE pl.post_id IN (?)
-      `, [postIds]);
-
-      labels = labelRows;
-    }
-
-    // Format response
-    const formattedPosts = posts.map(post => {
-      const postLabels = labels
-        .filter(label => label.post_id === post.id)
-        .map(label => ({ id: label.id, label: label.label }));
-
-      return {
-        ...post,
-        is_spotlight: Boolean(post.is_spotlight),
-        is_featured: Boolean(post.is_featured),
-        labels: postLabels || []
-      };
-    });
-
-    res.json({
-      success: true,
-      data: formattedPosts,
-      pagination: {
-        currentPage: 1,
-        totalPages: 1,
-        totalItems: formattedPosts.length
-      }
-    });
   } catch (error) {
     logger.error('Error fetching spotlight posts:', {
       error: error.message,
@@ -958,15 +1062,6 @@ exports.getSpotlightPosts = async (req, res) => {
       message: 'Terjadi kesalahan dalam mengambil spotlight posts',
       error: error.message
     });
-  } finally {
-    // Pastikan koneksi selalu dilepas
-    if (connection) {
-      try {
-        connection.release();
-      } catch (releaseError) {
-        logger.error('Error releasing connection:', releaseError);
-      }
-    }
   }
 };
 
@@ -1269,46 +1364,49 @@ exports.getRelatedPosts = async (req, res) => {
     const { id } = req.params;
     const limit = parseInt(req.query.limit) || 4;
 
-    // Query untuk mendapatkan related posts dengan format tanggal yang benar
-    const [relatedPosts] = await connection.query(`
-      SELECT
-        p.id,
-        p.title,
-        p.slug,
-        p.excerpt,
-        p.image,
-        DATE_FORMAT(p.created_at, '%Y-%m-%dT%H:%i:%s.000Z') as created_at,
-        DATE_FORMAT(p.publish_date, '%Y-%m-%dT%H:%i:%s.000Z') as publish_date,
-        GROUP_CONCAT(DISTINCT l.name) as labels
-      FROM posts p
-      LEFT JOIN post_labels pl ON p.id = pl.post_id
-      LEFT JOIN labels l ON pl.label_id = l.id
-      WHERE p.id != ?
-        AND p.status = 'published'
-        AND p.deleted_at IS NULL
-      GROUP BY p.id, p.title, p.slug, p.excerpt, p.image, p.created_at, p.publish_date
-      ORDER BY COALESCE(p.publish_date, p.created_at) DESC
-      LIMIT ?
-    `, [id, limit]);
+    // Gunakan db.executeQuery untuk mendapatkan koneksi yang dikelola dengan baik
+    const result = await db.executeQuery(async (connection) => {
+      // Query untuk mendapatkan related posts dengan format tanggal yang benar
+      const [relatedPosts] = await connection.query(`
+        SELECT
+          p.id,
+          p.title,
+          p.slug,
+          p.excerpt,
+          p.image,
+          DATE_FORMAT(p.created_at, '%Y-%m-%dT%H:%i:%s.000Z') as created_at,
+          DATE_FORMAT(p.publish_date, '%Y-%m-%dT%H:%i:%s.000Z') as publish_date,
+          GROUP_CONCAT(DISTINCT ul.label) as labels
+        FROM posts p
+        LEFT JOIN post_labels pl ON p.id = pl.post_id
+        LEFT JOIN unique_labels ul ON pl.label_id = ul.id
+        WHERE p.id != ?
+          AND p.status = 'published'
+          AND p.deleted_at IS NULL
+        GROUP BY p.id, p.title, p.slug, p.excerpt, p.image, p.created_at, p.publish_date
+        ORDER BY COALESCE(p.publish_date, p.created_at) DESC
+        LIMIT ?
+      `, [id, limit]);
 
-    // Format posts
-    const formattedPosts = relatedPosts.map(post => ({
-      id: post.id,
-      title: post.title,
-      slug: post.slug,
-      image: post.image ? formatImageUrl(post.image) : null,
-      publish_date: post.publish_date,
-      created_at: post.created_at,
-      excerpt: post.excerpt,
-      labels: post.labels ? post.labels.split(',').filter(Boolean) : []
-    }));
+      // Format posts
+      return relatedPosts.map(post => ({
+        id: post.id,
+        title: post.title,
+        slug: post.slug,
+        image: post.image ? formatImageUrl(post.image) : null,
+        publish_date: post.publish_date,
+        created_at: post.created_at,
+        excerpt: post.excerpt,
+        labels: post.labels ? post.labels.split(',').filter(Boolean) : []
+      }));
+    });
 
     // Debug log
-    console.log('Formatted posts with dates:', formattedPosts);
+    console.log('Formatted posts with dates:', result);
 
     res.json({
       success: true,
-      data: formattedPosts
+      data: result
     });
 
   } catch (error) {
@@ -1437,36 +1535,91 @@ exports.getPostsByAuthor = [isAdminOrWriter, async (req, res) => {
 exports.incrementViews = async (req, res) => {
   try {
     const { id } = req.params;
-    const ip = req.ip;
+    const userId = req.user ? req.user.id : null; // Ambil ID user dari token jika ada
 
-    // Gunakan koneksi langsung dari db
-    const connection = await db.getConnection();
+    // Ambil IP address dengan lebih teliti
+    let ip;
+
     try {
-      // Cek apakah sudah ada view dari IP ini dalam 24 jam terakhir
-      const [existingViews] = await connection.query(
-        `SELECT id FROM post_views
-         WHERE post_id = ? AND viewer_ip = ?
-         AND viewed_at > DATE_SUB(NOW(), INTERVAL 24 HOUR)`,
-        [id, ip]
-      );
+      // Coba ambil dari berbagai sumber
+      ip = req.headers['x-forwarded-for'] ||
+           req.headers['x-real-ip'] ||
+           req.connection?.remoteAddress ||
+           req.socket?.remoteAddress ||
+           req.ip ||
+           '0.0.0.0';
 
-      if (existingViews.length === 0) {
-        // Insert view baru jika belum ada view dalam 24 jam
-        await connection.query(
-          'INSERT INTO post_views (id, post_id, viewer_ip) VALUES (UUID(), ?, ?)',
-          [id, ip]
-        );
+      // Log semua sumber IP untuk debugging
+      logger.debug('IP sources:', {
+        'x-forwarded-for': req.headers['x-forwarded-for'],
+        'x-real-ip': req.headers['x-real-ip'],
+        'connection.remoteAddress': req.connection?.remoteAddress,
+        'socket.remoteAddress': req.socket?.remoteAddress,
+        'req.ip': req.ip
+      });
+
+      // Jika IP adalah ::1 (localhost IPv6), ubah ke 127.0.0.1
+      if (ip === '::1') ip = '127.0.0.1';
+
+      // Jika IP berisi koma (proxy chain), ambil IP pertama
+      if (ip && ip.includes(',')) {
+        ip = ip.split(',')[0].trim();
       }
 
-      res.json({ message: 'View count updated successfully' });
-    } catch (error) {
-      throw error;
+      // Validasi format IP
+      if (!ip || ip === 'undefined' || ip === 'null') {
+        ip = '0.0.0.0';
+      }
+    } catch (ipError) {
+      logger.error('Error getting IP address:', ipError);
+      ip = '0.0.0.0';
+    }
+
+    logger.info(`Using IP address: ${ip} for view count`);
+
+    logger.info(`Processing view increment for post ${id} by user ${userId || 'anonymous'} from IP ${ip}`);
+
+    // Import model PostView
+    const PostView = require('../models/PostView');
+
+    // Cek apakah post ada
+    const connection = await db.getConnection();
+    try {
+      const [postExists] = await connection.query(
+        'SELECT id FROM posts WHERE id = ?',
+        [id]
+      );
+
+      if (postExists.length === 0) {
+        logger.warn(`Attempted to increment views for non-existent post: ${id}`);
+        return res.status(404).json({
+          success: false,
+          message: 'Post tidak ditemukan'
+        });
+      }
+    } catch (dbError) {
+      logger.error('Database error checking post existence:', dbError);
+      throw dbError;
     } finally {
       connection.release();
     }
+
+    // Tambahkan view menggunakan model PostView
+    const viewAdded = await PostView.addView(id, userId, ip);
+    logger.info(`View ${viewAdded ? 'added' : 'already exists'} for post ${id}`);
+
+    // Dapatkan statistik view terbaru
+    const viewStats = await PostView.getViewStats(id);
+
+    res.json({
+      success: true,
+      message: viewAdded ? 'View count updated successfully' : 'View already counted',
+      data: viewStats
+    });
   } catch (error) {
     logger.error('Error incrementing views:', error);
     res.status(500).json({
+      success: false,
       message: 'Terjadi kesalahan saat mengupdate view count',
       error: error.message
     });
@@ -1504,6 +1657,93 @@ exports.getPostAnalytics = [isAdminOrAuthor, async (req, res) => {
     res.status(500).json({ message: 'Error fetching post analytics', error: error.message });
   }
 }];
+
+/**
+ * Mendapatkan statistik post (views, comments, likes) - hanya untuk pengguna terautentikasi
+ * @param {Object} req - Request object
+ * @param {Object} res - Response object
+ */
+exports.getPostStats = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.user ? req.user.id : null; // Ambil ID user dari token jika ada
+    const ip = req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress;
+
+    // Import model PostView
+    const PostView = require('../models/PostView');
+
+    // Tambahkan view jika user belum melihat post ini dalam 24 jam terakhir
+    // Hanya jika user bukan penulis post atau admin
+    const connection = await db.getConnection();
+    try {
+      // Dapatkan data post untuk views dari kolom views
+      const [postResult] = await connection.query(
+        `SELECT views, author_id
+         FROM posts
+         WHERE id = ? AND deleted_at IS NULL`,
+        [id]
+      );
+
+      // Jika post tidak ditemukan
+      if (postResult.length === 0) {
+        return res.status(404).json({
+          success: false,
+          message: 'Post tidak ditemukan'
+        });
+      }
+
+      // Cek apakah user adalah penulis post atau admin
+      const isAuthor = userId && postResult[0].author_id === userId;
+      const isAdmin = req.user && req.user.role === 'admin';
+
+      // Jika bukan penulis atau admin, tambahkan view
+      if (!isAuthor && !isAdmin && userId) {
+        await PostView.addView(id, userId, ip);
+      }
+
+      // Dapatkan jumlah komentar dari tabel comments
+      const [commentsResult] = await connection.query(
+        `SELECT COUNT(*) as total_comments
+         FROM comments
+         WHERE post_id = ? AND deleted_at IS NULL`,
+        [id]
+      );
+
+      // Dapatkan jumlah likes dari tabel likes
+      const [likesResult] = await connection.query(
+        `SELECT COUNT(*) as total_likes
+         FROM likes
+         WHERE post_id = ?`,
+        [id]
+      );
+
+      // Dapatkan statistik views menggunakan model PostView
+      const viewStats = await PostView.getViewStats(id);
+
+      // Gabungkan hasil
+      const stats = {
+        views: viewStats.total_views,
+        unique_viewers: viewStats.unique_viewers,
+        commentCount: commentsResult[0].total_comments,
+        likeCount: likesResult[0].total_likes,
+        daily_views: viewStats.daily_views
+      };
+
+      res.json(stats);
+    } catch (error) {
+      throw error;
+    } finally {
+      connection.release();
+    }
+  } catch (error) {
+    logger.error('Error fetching post stats:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Terjadi kesalahan saat mengambil statistik post',
+      error: error.message
+    });
+  }
+};
 
 exports.getPosts = async (req, res) => {
   const { page = 1, limit = 20 } = req.query;
@@ -1755,11 +1995,16 @@ exports.getPublicPostBySlug = async (req, res) => {
         });
       }
 
-      // Query terpisah untuk mendapatkan label
+      // Query terpisah untuk mendapatkan label dengan informasi parent
       const [labelRows] = await connection.query(`
-        SELECT ul.id, ul.label
+        SELECT
+          ul.id,
+          ul.label,
+          ul.parent_id,
+          parent.label as parent_label
         FROM post_labels pl
         JOIN unique_labels ul ON pl.label_id = ul.id
+        LEFT JOIN unique_labels parent ON ul.parent_id = parent.id
         WHERE pl.post_id = ?
       `, [post.id]);
 
@@ -1774,38 +2019,46 @@ exports.getPublicPostBySlug = async (req, res) => {
           // Pendekatan baru: Gunakan GROUP BY alih-alih DISTINCT
           const [relatedRows] = await connection.query(`
             SELECT
-              p.id, p.title, p.slug, p.excerpt, p.image
+              p.id, p.title, p.slug, p.excerpt, p.image,
+              DATE_FORMAT(p.created_at, '%Y-%m-%dT%H:%i:%s.000Z') as created_at,
+              DATE_FORMAT(p.publish_date, '%Y-%m-%dT%H:%i:%s.000Z') as publish_date
             FROM posts p
             JOIN post_labels pl ON p.id = pl.post_id
             WHERE pl.label_id IN (?)
               AND p.id != ?
               AND p.status = 'published'
               AND p.deleted_at IS NULL
-            GROUP BY p.id, p.title, p.slug, p.excerpt, p.image
-            ORDER BY p.created_at DESC
+            GROUP BY p.id, p.title, p.slug, p.excerpt, p.image, p.created_at, p.publish_date
+            ORDER BY COALESCE(p.publish_date, p.created_at) DESC
             LIMIT 5
           `, [labelIds, post.id]);
 
           relatedPosts = relatedRows.map(rp => ({
             ...rp,
-            image: rp.image ? formatImageUrl(rp.image) : null
+            image: rp.image ? formatImageUrl(rp.image) : null,
+            publish_date: rp.publish_date,
+            created_at: rp.created_at
           }));
         } else {
           // Jika tidak ada label, ambil post terbaru sebagai related
           const [recentRows] = await connection.query(`
             SELECT
-              p.id, p.title, p.slug, p.excerpt, p.image
+              p.id, p.title, p.slug, p.excerpt, p.image,
+              DATE_FORMAT(p.created_at, '%Y-%m-%dT%H:%i:%s.000Z') as created_at,
+              DATE_FORMAT(p.publish_date, '%Y-%m-%dT%H:%i:%s.000Z') as publish_date
             FROM posts p
             WHERE p.id != ?
               AND p.status = 'published'
               AND p.deleted_at IS NULL
-            ORDER BY p.created_at DESC
+            ORDER BY COALESCE(p.publish_date, p.created_at) DESC
             LIMIT 5
           `, [post.id]);
 
           relatedPosts = recentRows.map(rp => ({
             ...rp,
-            image: rp.image ? formatImageUrl(rp.image) : null
+            image: rp.image ? formatImageUrl(rp.image) : null,
+            publish_date: rp.publish_date,
+            created_at: rp.created_at
           }));
         }
       } catch (relatedError) {
@@ -1833,6 +2086,8 @@ exports.getPublicPostBySlug = async (req, res) => {
         status: post.status,
         slug: post.slug,
         excerpt: post.excerpt || '',
+        tags: post.tags || '',
+        allow_comments: post.allow_comments === undefined ? 1 : post.allow_comments,
         labels: labelRows || [],
         author: {
           name: post.author_name,
@@ -1840,6 +2095,8 @@ exports.getPublicPostBySlug = async (req, res) => {
         },
         related_posts: relatedPosts
       };
+
+
 
       return res.json({
         success: true,
@@ -1909,11 +2166,16 @@ exports.getPublicPostById = async (req, res) => {
         });
       }
 
-      // Query terpisah untuk mendapatkan label
+      // Query terpisah untuk mendapatkan label dengan informasi parent
       const [labelRows] = await connection.query(`
-        SELECT ul.id, ul.label
+        SELECT
+          ul.id,
+          ul.label,
+          ul.parent_id,
+          parent.label as parent_label
         FROM post_labels pl
         JOIN unique_labels ul ON pl.label_id = ul.id
+        LEFT JOIN unique_labels parent ON ul.parent_id = parent.id
         WHERE pl.post_id = ?
       `, [post.id]);
 
@@ -1978,12 +2240,16 @@ exports.getPublicPostById = async (req, res) => {
         labels: labelRows || [],
         is_featured: Boolean(post.is_featured),
         is_spotlight: Boolean(post.is_spotlight),
+        tags: post.tags || '',
+        allow_comments: post.allow_comments === undefined ? 1 : post.allow_comments,
         author: {
           name: post.author_name,
           email: post.author_email
         },
         related_posts: relatedPosts
       };
+
+
 
       return res.json({
         success: true,
@@ -2019,11 +2285,14 @@ exports.getAdminFeaturedPost = async (req, res) => {
     try {
       // Ubah query untuk mencocokkan dengan getFeaturedPosts
       // Hapus filter status untuk admin agar bisa melihat semua post yang featured
+      // Tambahkan statistik post (views, comments, likes)
       const [posts] = await connection.query(`
         SELECT
           p.*,
           u.name as author_name,
-          u.email as author_email
+          u.email as author_email,
+          (SELECT COUNT(*) FROM comments c WHERE c.post_id = p.id AND c.deleted_at IS NULL) as comments_count,
+          (SELECT COUNT(*) FROM likes l WHERE l.post_id = p.id) as likes_count
         FROM posts p
         LEFT JOIN users u ON p.author_id = u.id
         WHERE p.is_featured = 1
@@ -2048,11 +2317,16 @@ exports.getAdminFeaturedPost = async (req, res) => {
       const post = posts[0];
       logger.info(`Featured post details: ID=${post.id}, Title="${post.title}", Status=${post.status}`);
 
-      // Query terpisah untuk mendapatkan label
+      // Query terpisah untuk mendapatkan label dengan informasi parent
       const [labelRows] = await connection.query(`
-        SELECT ul.id, ul.label
+        SELECT
+          ul.id,
+          ul.label,
+          ul.parent_id,
+          parent.label as parent_label
         FROM post_labels pl
         JOIN unique_labels ul ON pl.label_id = ul.id
+        LEFT JOIN unique_labels parent ON ul.parent_id = parent.id
         WHERE pl.post_id = ?
       `, [post.id]);
 
@@ -2063,6 +2337,8 @@ exports.getAdminFeaturedPost = async (req, res) => {
         labels: labelRows || [],
         is_featured: Boolean(post.is_featured),
         is_spotlight: Boolean(post.is_spotlight),
+        comments_count: post.comments_count || 0,
+        likes_count: post.likes_count || 0,
         author: {
           name: post.author_name,
           email: post.author_email
@@ -2171,6 +2447,304 @@ exports.getMyDeletedPosts = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: 'Terjadi kesalahan server',
+      error: error.message
+    });
+  }
+};
+
+// Mendapatkan statistik post (views, comments, likes)
+exports.getPostStats = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.user.id;
+
+    // Gunakan koneksi langsung dari db
+    const connection = await db.getConnection();
+    try {
+      // Ambil data views dari tabel posts
+      const [postResult] = await connection.query(
+        `SELECT views FROM posts WHERE id = ?`,
+        [id]
+      );
+
+      if (postResult.length === 0) {
+        return res.status(404).json({
+          success: false,
+          message: 'Post tidak ditemukan'
+        });
+      }
+
+      // Ambil jumlah komentar
+      const [commentResult] = await connection.query(
+        `SELECT COUNT(*) as count FROM comments WHERE post_id = ? AND deleted_at IS NULL`,
+        [id]
+      );
+
+      // Ambil jumlah likes
+      const [likeResult] = await connection.query(
+        `SELECT COUNT(*) as count FROM likes WHERE post_id = ?`,
+        [id]
+      );
+
+      // Cek apakah user sudah like post ini
+      const [userLikeResult] = await connection.query(
+        `SELECT COUNT(*) as count FROM likes WHERE post_id = ? AND user_id = ?`,
+        [id, userId]
+      );
+
+      // Cek apakah user sudah view post ini
+      const [userViewResult] = await connection.query(
+        `SELECT COUNT(*) as count FROM post_views WHERE post_id = ? AND user_id = ?`,
+        [id, userId]
+      );
+
+      const stats = {
+        views: postResult[0].views || 0,
+        commentCount: commentResult[0].count || 0,
+        likeCount: likeResult[0].count || 0,
+        userLiked: userLikeResult[0].count > 0,
+        userViewed: userViewResult[0].count > 0
+      };
+
+      return res.json({
+        success: true,
+        data: stats
+      });
+    } catch (error) {
+      throw error;
+    } finally {
+      connection.release();
+    }
+  } catch (error) {
+    logger.error('Error getting post stats:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Terjadi kesalahan saat mengambil statistik post',
+      error: error.message
+    });
+  }
+};
+
+// Increment views - DEPRECATED, gunakan implementasi di atas
+// Fungsi ini dipertahankan untuk kompatibilitas dengan kode lama
+exports.incrementViewsOld = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.user ? req.user.id : null; // Perbaikan: Periksa apakah req.user ada
+
+    // Gunakan implementasi baru yang lebih baik
+    return exports.incrementViews(req, res);
+  } catch (error) {
+    logger.error('Error in deprecated incrementViews:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Terjadi kesalahan saat menambah views',
+      error: error.message
+    });
+  }
+};
+
+// Endpoint khusus untuk admin yang menangani semua parameter filter
+exports.getAllPostsAdmin = async (req, res) => {
+  try {
+    const {
+      page = 1,
+      limit = 20,
+      status = 'all',
+      label_id = null,
+      sort = 'created_at:desc',
+      featured = 'all',
+      search = '',
+      user_role = null // Parameter untuk filter berdasarkan role user
+    } = req.query;
+
+    logger.info('Admin fetching all posts with filters:', {
+      page, limit, status, label_id, sort, featured, search, user_role
+    });
+
+    let whereConditions = [];
+    let params = [];
+
+    // Filter status
+    if (status && status !== 'all') {
+      whereConditions.push('p.status = ?');
+      params.push(status);
+    }
+
+    // Filter label
+    if (label_id) {
+      whereConditions.push(`
+        EXISTS (
+          SELECT 1 FROM post_labels pl
+          WHERE pl.post_id = p.id AND pl.label_id = ?
+        )
+      `);
+      params.push(label_id);
+    }
+
+    // Filter by user role (admin atau writer)
+    if (user_role && user_role !== 'all') {
+      whereConditions.push('u.role = ?');
+      params.push(user_role);
+    }
+
+    // Filter featured/spotlight/regular
+    if (featured === 'featured') {
+      whereConditions.push('p.is_featured = 1');
+    } else if (featured === 'spotlight') {
+      whereConditions.push('p.is_spotlight = 1');
+    } else if (featured === 'regular') {
+      whereConditions.push('p.is_featured = 0 AND p.is_spotlight = 0');
+    }
+
+    // Search by keyword
+    if (search) {
+      whereConditions.push('(p.title LIKE ? OR p.content LIKE ?)');
+      params.push(`%${search}%`, `%${search}%`);
+    }
+
+    // Handling different sort options
+    let orderBy = '';
+    const [sortField, sortOrder] = sort.split(':');
+
+    // Validasi sort field dan order
+    const validSortFields = ['created_at', 'updated_at', 'views', 'title', 'status'];
+    const validSortOrders = ['asc', 'desc'];
+
+    if (validSortFields.includes(sortField) && validSortOrders.includes(sortOrder)) {
+      orderBy = `p.${sortField} ${sortOrder.toUpperCase()}`;
+    } else {
+      orderBy = 'p.created_at DESC'; // Default sort
+    }
+
+    // Query dengan statistik post (views, comments, likes)
+    const query = `
+      SELECT
+        p.id, p.title, p.slug, p.content, p.image, p.status,
+        p.created_at, p.updated_at, p.is_featured, p.is_spotlight,
+        p.views, p.author_id, u.name as author_name, u.role as author_role,
+        (SELECT COUNT(*) FROM comments c WHERE c.post_id = p.id AND c.deleted_at IS NULL) as comments_count,
+        (SELECT COUNT(*) FROM likes l WHERE l.post_id = p.id) as likes_count
+      FROM posts p
+      LEFT JOIN users u ON p.author_id = u.id
+      ${whereConditions.length ? 'WHERE ' + whereConditions.join(' AND ') : ''}
+      ORDER BY ${orderBy}
+      LIMIT ? OFFSET ?
+    `;
+
+    const offset = (parseInt(page) - 1) * parseInt(limit);
+    const queryParams = [...params, parseInt(limit), offset];
+
+    // Count total records for pagination
+    const countQuery = `
+      SELECT COUNT(*) as total
+      FROM posts p
+      LEFT JOIN users u ON p.author_id = u.id
+      ${whereConditions.length ? 'WHERE ' + whereConditions.join(' AND ') : ''}
+    `;
+
+    try {
+      // Gunakan executeQuery untuk menjalankan query dengan koneksi yang dikelola dengan baik
+      const result = await db.executeQuery(async (connection) => {
+        // Eksekusi query utama
+        const [postsResult] = await connection.query(query, queryParams);
+        const [count] = await connection.query(countQuery, params);
+
+        // Jika tidak ada hasil, kembalikan array kosong
+        if (postsResult.length === 0) {
+          return {
+            success: true,
+            data: [],
+            pagination: {
+              currentPage: parseInt(page),
+              totalPages: 0,
+              totalItems: 0,
+              limit: parseInt(limit)
+            }
+          };
+        }
+
+        // Ambil label secara terpisah untuk mengurangi kompleksitas query
+        const postIds = postsResult.map(post => post.id);
+        let labels = [];
+
+        if (postIds.length > 0) {
+          const [labelRows] = await connection.query(`
+            SELECT pl.post_id, ul.id, ul.label
+            FROM post_labels pl
+            JOIN unique_labels ul ON pl.label_id = ul.id
+            WHERE pl.post_id IN (?)
+          `, [postIds]);
+
+          labels = labelRows;
+        }
+
+        // Format response dengan label yang diambil secara terpisah
+        const formattedPosts = postsResult.map(post => {
+          const postLabels = labels
+            .filter(label => label.post_id === post.id)
+            .map(label => ({ id: label.id, label: label.label }));
+
+          return {
+            ...post,
+            is_spotlight: Boolean(post.is_spotlight),
+            is_featured: Boolean(post.is_featured),
+            labels: postLabels || [],
+            views: post.views || 0,
+            comments_count: post.comments_count || 0,
+            likes_count: post.likes_count || 0,
+            author: {
+              id: post.author_id,
+              name: post.author_name,
+              role: post.author_role
+            }
+          };
+        });
+
+        return {
+          success: true,
+          data: formattedPosts,
+          pagination: {
+            currentPage: parseInt(page),
+            totalPages: Math.ceil(count[0].total / parseInt(limit)),
+            totalItems: count[0].total,
+            limit: parseInt(limit)
+          }
+        };
+      });
+
+      // Kirim hasil ke client
+      return res.json(result);
+    } catch (dbError) {
+      logger.error('Database error in getAllPostsAdmin:', {
+        error: dbError.message,
+        stack: dbError.stack,
+        service: 'database-service'
+      });
+
+      // Gunakan fallback data untuk error database
+      logger.warn('Using fallback data for getAllPostsAdmin due to database error');
+      return res.status(200).json(FALLBACK_POSTS);
+    }
+  } catch (error) {
+    logger.error('Error getting admin posts:', {
+      error: error.message,
+      code: error.code,
+      errno: error.errno,
+      sqlState: error.sqlState,
+      sqlMessage: error.sqlMessage,
+      stack: error.stack
+    });
+
+    // Selalu gunakan fallback data untuk error apapun di production
+    if (process.env.NODE_ENV === 'production') {
+      logger.warn('Using fallback data for getAllPostsAdmin due to error in production');
+      return res.status(200).json(FALLBACK_POSTS);
+    }
+
+    res.status(500).json({
+      success: false,
+      message: 'Terjadi kesalahan dalam mengambil data posts',
       error: error.message
     });
   }

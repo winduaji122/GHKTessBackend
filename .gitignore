@@ -24,3 +24,4 @@ logs/*
 !logs/.gitkeep
 .env
 .env.production
+.env.production.local

@@ -30,6 +30,8 @@ class Post {
     this.created_at = data.created_at;
     this.updated_at = data.updated_at;
     this.deleted_at = data.deleted_at;
+    this.tags = data.tags;
+    this.allow_comments = data.allow_comments;
   }
 
   static async getAllPosts(page = 1, limit = 10, search = '', category = '', label = '') {
@@ -187,6 +189,8 @@ class Post {
             excerpt = ?,
             slug = ?,
             version = ?,
+            tags = ?,
+            allow_comments = ?,
             updated_at = NOW()
            WHERE id = ? AND deleted_at IS NULL`,
           [
@@ -200,6 +204,8 @@ class Post {
             updateData.excerpt,
             updateData.slug,
             updateData.version,
+            updateData.tags || '',
+            updateData.allow_comments ? 1 : 0,
             id
           ]
         );
@@ -1281,6 +1287,8 @@ class Post {
           is_spotlight: Boolean(post.is_spotlight),
           version: post.version || 1,
           views: post.views || 0,
+          tags: post.tags || '',
+          allow_comments: post.allow_comments !== undefined ? Boolean(post.allow_comments) : true,
           labels: labelResults?.map(label => ({
             id: label.id,
             name: label.label
@@ -1476,6 +1484,8 @@ class Post {
         }
       };
 
+
+
       // Hapus field yang tidak perlu
       delete post.author_name;
       delete post.author_username;
@@ -1552,7 +1562,9 @@ class Post {
           excerpt,
           is_featured,
           is_spotlight,
-          image
+          image,
+          tags,
+          allow_comments
         } = postData;
 
         // Generate slug dari title
@@ -1561,8 +1573,8 @@ class Post {
         // Query untuk insert post
         const [result] = await connection.query(
           `INSERT INTO posts (id, title, content, image, publish_date, is_featured, is_spotlight, author_id, excerpt,
-slug, status)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+slug, status, tags, allow_comments)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             postId, // Gunakan UUID yang digenerate
             title,
@@ -1574,7 +1586,9 @@ slug, status)
             user_id, // Gunakan user_id sebagai author_id
             excerpt || '',
             slug,
-            status
+            status,
+            tags || '',
+            allow_comments === undefined ? 1 : (allow_comments ? 1 : 0)
           ]
         );
 

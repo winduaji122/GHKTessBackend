@@ -11,14 +11,17 @@ const dbConfig = {
   password: process.env.DB_PASSWORD,
   database: process.env.DB_NAME,
   waitForConnections: true, // Tunggu koneksi jika tidak tersedia
-  connectionLimit: 1, // Batasi koneksi ke 1 untuk Clever Cloud (max 5)
-  idleTimeout: 10000, // 10 detik timeout untuk koneksi idle
-  queueLimit: 5, // Antri hingga 5 request jika koneksi penuh
-  enableKeepAlive: false, // Nonaktifkan keepalive di serverless
-  keepAliveInitialDelay: 0,
+  connectionLimit: 10, // Tingkatkan batas koneksi untuk database lokal
+  idleTimeout: 60000, // 60 detik timeout untuk koneksi idle
+  queueLimit: 20, // Tingkatkan batas antrian untuk menangani lebih banyak permintaan bersamaan
+  enableKeepAlive: true, // Aktifkan keepalive untuk database lokal
+  keepAliveInitialDelay: 10000, // 10 detik delay awal untuk keepalive
   multipleStatements: false, // Nonaktifkan multiple statements untuk keamanan
-  connectTimeout: 10000, // Timeout koneksi 10 detik
-  acquireTimeout: 8000 // Timeout untuk mendapatkan koneksi dari pool
+  connectTimeout: 15000, // 15 detik timeout koneksi
+  acquireTimeout: 15000, // 15 detik timeout untuk mendapatkan koneksi dari pool
+  decimalNumbers: true, // Konversi nilai desimal ke JavaScript number
+  dateStrings: true, // Kembalikan tanggal sebagai string
+  namedPlaceholders: true // Gunakan placeholder bernama untuk query yang lebih jelas
 };
 
 // Tambahkan SSL jika diperlukan
@@ -166,19 +169,54 @@ async function getConnection() {
 const executeQuery = async (queryOrCallback, params = [], retryCount = 0) => {
   const MAX_RETRIES = 5;
   const RETRY_DELAY = 1000; // ms
+  const ACQUIRE_TIMEOUT = 15000; // ms - Sesuaikan dengan acquireTimeout di dbConfig
 
-  let connection;
+  let connection = null;
+  let connectionAcquired = false;
+  let result = null;
+
   try {
-    // Tambahkan timeout untuk mendapatkan koneksi
-    const getConnectionPromise = pool.getConnection();
-    const timeoutPromise = new Promise((_, reject) => {
-      setTimeout(() => reject(new Error('Connection acquisition timeout')), 5000);
-    });
-
+    // Dapatkan koneksi dari pool
     try {
-      connection = await Promise.race([getConnectionPromise, timeoutPromise]);
+      connection = await pool.getConnection();
+      connectionAcquired = true;
+
+      // Log koneksi yang berhasil didapatkan (hanya jika debug diaktifkan)
+      if (process.env.DEBUG_DB === 'true') {
+        logger.info(`Connection ${connection.threadId} acquired`, { service: 'database-service' });
+      }
+
+      // Jika queryOrCallback adalah fungsi, jalankan dengan connection
+      if (typeof queryOrCallback === 'function') {
+        try {
+          result = await queryOrCallback(connection);
+        } catch (funcError) {
+          logger.error('Error executing function with connection:', {
+            error: funcError.message,
+            stack: funcError.stack,
+            service: 'database-service'
+          });
+          throw funcError;
+        }
+      } else {
+        // Jika queryOrCallback adalah string (query SQL)
+        try {
+          const [queryResult] = await connection.query(queryOrCallback, params);
+          result = queryResult;
+        } catch (queryError) {
+          logger.error('Error executing query:', {
+            error: queryError.message,
+            query: typeof queryOrCallback === 'string' ? queryOrCallback.substring(0, 100) + '...' : 'Function',
+            service: 'database-service'
+          });
+          throw queryError;
+        }
+      }
+
+      return result;
     } catch (connError) {
-      logger.error('Failed to acquire connection:', {
+      // Tangani error koneksi
+      logger.error('Connection error:', {
         error: connError.message,
         stack: connError.stack,
         retryCount,
@@ -190,7 +228,8 @@ const executeQuery = async (queryOrCallback, params = [], retryCount = 0) => {
           (connError.message.includes('max_user_connections') ||
            connError.message.includes('Connection acquisition timeout') ||
            connError.message.includes('ETIMEDOUT') ||
-           connError.message.includes('ECONNREFUSED'))) {
+           connError.message.includes('ECONNREFUSED') ||
+           connError.message.includes('Queue limit reached'))) {
         logger.info(`Retrying database connection (${retryCount + 1}/${MAX_RETRIES})...`, { service: 'database-service' });
         await new Promise(resolve => setTimeout(resolve, RETRY_DELAY * Math.pow(2, retryCount)));
         return executeQuery(queryOrCallback, params, retryCount + 1);
@@ -198,25 +237,8 @@ const executeQuery = async (queryOrCallback, params = [], retryCount = 0) => {
 
       throw new Error(`Database connection error: ${connError.message}`);
     }
-
-    // Log koneksi yang berhasil didapatkan (hanya di development)
-    if (process.env.NODE_ENV !== 'production') {
-      logger.info('MySQL connection acquired', {
-        threadId: connection.threadId,
-        service: 'database-service'
-      });
-    }
-
-    // Jika queryOrCallback adalah fungsi, jalankan dengan connection
-    if (typeof queryOrCallback === 'function') {
-      return await queryOrCallback(connection);
-    }
-
-    // Jika queryOrCallback adalah string (query SQL)
-    const [results] = await connection.query(queryOrCallback, params);
-    return results;
-
   } catch (error) {
+    // Tangani error umum
     logger.error('Database query error:', {
       error: error.message,
       code: error.code,
@@ -228,28 +250,22 @@ const executeQuery = async (queryOrCallback, params = [], retryCount = 0) => {
     });
     throw error;
   } finally {
-    if (connection) {
+    // Selalu lepaskan koneksi jika berhasil didapatkan
+    if (connection && connectionAcquired) {
       try {
-        connection.release();
-        // Log koneksi yang dilepas (hanya di development)
-        if (process.env.NODE_ENV !== 'production') {
-          logger.info('MySQL connection released', {
-            threadId: connection.threadId,
-            service: 'database-service'
-          });
+        // Periksa apakah koneksi masih valid dan belum dilepaskan
+        if (connection.release && typeof connection.release === 'function') {
+          connection.release();
+          if (process.env.DEBUG_DB === 'true') {
+            logger.info(`Connection ${connection.threadId} released`, { service: 'database-service' });
+          }
         }
       } catch (releaseError) {
-        logger.error('Error releasing connection:', {
+        logger.warn('Error releasing connection:', {
           error: releaseError.message,
-          stack: releaseError.stack,
           service: 'database-service'
         });
-        // Don't throw here to prevent crashes
       }
-    } else {
-      logger.warn('No connection to release', {
-        service: 'database-service'
-      });
     }
   }
 };
@@ -551,6 +567,70 @@ async function testConnections() {
   }
 }
 
+// Fungsi untuk membersihkan koneksi yang tidak digunakan
+async function cleanupIdleConnections() {
+  try {
+    // Dapatkan status pool
+    const poolStatus = pool.pool ? {
+      acquired: pool.pool._acquiringConnections.length,
+      free: pool.pool._freeConnections.length,
+      queue: pool.pool._connectionQueue.length,
+      all: pool.pool._allConnections.length,
+      total: pool.pool._allConnections.length + pool.pool._connectionQueue.length
+    } : { acquired: 0, free: 0, queue: 0, all: 0, total: 0 };
+
+    logger.info('Pool status before cleanup:', {
+      ...poolStatus,
+      service: 'database-service'
+    });
+
+    // Jika ada koneksi yang tidak digunakan, coba bersihkan
+    if (poolStatus.free > 0) {
+      // Dapatkan semua koneksi yang tidak digunakan
+      const freeConnections = pool.pool._freeConnections;
+
+      // Lepaskan koneksi yang tidak digunakan
+      for (let i = freeConnections.length - 1; i >= 0; i--) {
+        try {
+          const conn = freeConnections[i];
+          if (conn && typeof conn.release === 'function') {
+            conn.release();
+            logger.info(`Released idle connection ${conn.threadId} during cleanup`, { service: 'database-service' });
+          }
+        } catch (releaseError) {
+          logger.warn('Error releasing idle connection during cleanup:', {
+            error: releaseError.message,
+            service: 'database-service'
+          });
+        }
+      }
+    }
+
+    // Dapatkan status pool setelah pembersihan
+    const newPoolStatus = pool.pool ? {
+      acquired: pool.pool._acquiringConnections.length,
+      free: pool.pool._freeConnections.length,
+      queue: pool.pool._connectionQueue.length,
+      all: pool.pool._allConnections.length,
+      total: pool.pool._allConnections.length + pool.pool._connectionQueue.length
+    } : { acquired: 0, free: 0, queue: 0, all: 0, total: 0 };
+
+    logger.info('Pool status after cleanup:', {
+      ...newPoolStatus,
+      service: 'database-service'
+    });
+
+    return true;
+  } catch (error) {
+    logger.error('Error cleaning up idle connections:', {
+      error: error.message,
+      stack: error.stack,
+      service: 'database-service'
+    });
+    return false;
+  }
+}
+
 // Nonaktifkan pengujian koneksi otomatis untuk mengurangi koneksi saat startup
 // testConnections();
 
@@ -735,6 +815,212 @@ async function clearCachePattern(pattern) {
   }
 }
 
+async function clearAllCache() {
+  try {
+    if (redis && typeof redis.keys === 'function') {
+      const keys = await redis.keys('*');
+      if (keys.length > 0) {
+        await redis.del(keys);
+        logger.info(`All cache cleared (${keys.length} keys)`);
+      }
+    }
+  } catch (error) {
+    logger.error('Error clearing all cache:', error);
+  }
+}
+
+// Fungsi untuk membersihkan koneksi yang tidak digunakan
+async function cleanupIdleConnections() {
+  try {
+    // Coba dapatkan koneksi baru dan langsung lepaskan
+    // Ini akan membantu memastikan pool dalam keadaan baik
+    try {
+      const testConnection = await pool.getConnection();
+      if (testConnection) {
+        testConnection.release();
+        // Kurangi verbositas log
+        if (process.env.DEBUG_DB === 'true') {
+          logger.info('Test connection acquired and released successfully', { service: 'database-service' });
+        }
+      }
+    } catch (connError) {
+      logger.warn('Could not acquire test connection during cleanup', {
+        error: connError.message,
+        service: 'database-service'
+      });
+    }
+
+    // Dapatkan status pool jika memungkinkan
+    if (process.env.DEBUG_DB === 'true') {
+      let poolStatus = { acquired: 0, free: 0, queue: 0, all: 0, total: 0 };
+
+      try {
+        if (pool && pool.pool) {
+          // Periksa apakah properti internal tersedia
+          const hasAcquiring = Array.isArray(pool.pool._acquiringConnections);
+          const hasFree = Array.isArray(pool.pool._freeConnections);
+          const hasQueue = Array.isArray(pool.pool._connectionQueue);
+          const hasAll = Array.isArray(pool.pool._allConnections);
+
+          poolStatus = {
+            acquired: hasAcquiring ? pool.pool._acquiringConnections.length : 0,
+            free: hasFree ? pool.pool._freeConnections.length : 0,
+            queue: hasQueue ? pool.pool._connectionQueue.length : 0,
+            all: hasAll ? pool.pool._allConnections.length : 0,
+            total: (hasAll ? pool.pool._allConnections.length : 0) + (hasQueue ? pool.pool._connectionQueue.length : 0)
+          };
+        }
+
+        logger.info('Pool status:', {
+          ...poolStatus,
+          service: 'database-service'
+        });
+      } catch (statusError) {
+        logger.warn('Could not get pool status', {
+          error: statusError.message,
+          service: 'database-service'
+        });
+      }
+    }
+
+    return true;
+  } catch (error) {
+    logger.error('Error cleaning up idle connections:', {
+      error: error.message,
+      stack: error.stack,
+      service: 'database-service'
+    });
+    return false;
+  }
+}
+
+// Jalankan pembersihan koneksi setiap 5 menit (300000 ms) untuk mengurangi log yang berlebihan
+const cleanupInterval = setInterval(cleanupIdleConnections, 300000);
+
+// Pastikan interval dibersihkan saat aplikasi berhenti
+process.on('SIGINT', () => {
+  clearInterval(cleanupInterval);
+  logger.info('Cleanup interval cleared', { service: 'database-service' });
+});
+
+// Fungsi untuk menangani koneksi yang hilang
+async function handleLostConnection() {
+  try {
+    logger.warn('Handling lost connection...', { service: 'database-service' });
+
+    // Coba bersihkan semua koneksi yang ada
+    await cleanupIdleConnections();
+
+    // Coba buat koneksi baru untuk memverifikasi bahwa database masih dapat diakses
+    try {
+      const testConnection = await pool.getConnection();
+      testConnection.release();
+
+      logger.info('Database connection restored', { service: 'database-service' });
+      return true;
+    } catch (testError) {
+      logger.error('Failed to acquire test connection:', {
+        error: testError.message,
+        service: 'database-service'
+      });
+      throw testError; // Re-throw untuk masuk ke blok catch berikutnya
+    }
+  } catch (error) {
+    logger.error('Failed to restore database connection:', {
+      error: error.message,
+      stack: error.stack,
+      service: 'database-service'
+    });
+
+    // Jika gagal, coba buat pool baru
+    try {
+      logger.warn('Recreating connection pool...', { service: 'database-service' });
+
+      // Tutup pool yang ada jika memungkinkan
+      try {
+        if (pool && typeof pool.end === 'function') {
+          await pool.end();
+          logger.info('Existing pool closed successfully', { service: 'database-service' });
+        }
+      } catch (endError) {
+        logger.warn('Error closing existing pool:', {
+          error: endError.message,
+          service: 'database-service'
+        });
+        // Lanjutkan meskipun gagal menutup pool yang ada
+      }
+
+      // Buat pool baru
+      pool = mysql.createPool(dbConfig);
+
+      // Tambahkan event listener
+      pool.on('acquire', function (connection) {
+        logger.info(`Connection ${connection.threadId} acquired`);
+      });
+
+      pool.on('release', function (connection) {
+        logger.info(`Connection ${connection.threadId} released`);
+      });
+
+      pool.on('enqueue', function () {
+        logger.warn('Waiting for available connection slot');
+      });
+
+      // Verifikasi koneksi baru
+      try {
+        const newConnection = await pool.getConnection();
+        newConnection.release();
+
+        logger.info('Connection pool recreated successfully', { service: 'database-service' });
+        return true;
+      } catch (verifyError) {
+        logger.error('Failed to verify new connection pool:', {
+          error: verifyError.message,
+          service: 'database-service'
+        });
+        throw verifyError; // Re-throw untuk masuk ke blok catch berikutnya
+      }
+    } catch (recreateError) {
+      logger.error('Failed to recreate connection pool:', {
+        error: recreateError.message,
+        stack: recreateError.stack,
+        service: 'database-service'
+      });
+      return false;
+    }
+  }
+}
+
+// Jalankan penanganan koneksi yang hilang setiap 5 menit
+const connectionCheckInterval = setInterval(async () => {
+  try {
+    // Coba buat koneksi untuk memverifikasi bahwa database masih dapat diakses
+    const testConnection = await pool.getConnection();
+    testConnection.release();
+
+    // Log hanya jika debug diaktifkan
+    if (process.env.DEBUG_DB === 'true') {
+      logger.info('Connection check successful', { service: 'database-service' });
+    }
+  } catch (error) {
+    logger.error('Connection check failed:', {
+      error: error.message,
+      service: 'database-service'
+    });
+
+    // Jika gagal, coba tangani koneksi yang hilang
+    await handleLostConnection();
+  }
+}, 300000); // 5 menit
+
+// Pastikan interval dibersihkan saat aplikasi berhenti
+process.on('SIGINT', () => {
+  clearInterval(cleanupInterval);
+  clearInterval(connectionCheckInterval);
+  logger.info('All intervals cleared', { service: 'database-service' });
+  process.exit(0);
+});
+
 module.exports = {
   pool,
   redis,
@@ -764,5 +1050,9 @@ module.exports = {
   setCache,
   getCache,
   deleteCache,
-  clearCachePattern
+  clearCachePattern,
+  clearAllCache,
+  cleanupIdleConnections,
+  handleLostConnection,
+  testConnections
 };

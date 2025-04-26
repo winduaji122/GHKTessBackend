@@ -146,13 +146,25 @@ router.get('/labels', async (req, res) => {
   try {
     const labels = await executeQuery(async (connection) => {
       const query = `
-        SELECT id, label as name
-        FROM unique_labels
-        ORDER BY label ASC
+        SELECT l.*, p.label as parent_label
+        FROM unique_labels l
+        LEFT JOIN unique_labels p ON l.parent_id = p.id
+        ORDER BY CASE WHEN l.parent_id IS NULL THEN 0 ELSE 1 END, l.label
       `;
 
       const [rows] = await connection.query(query);
-      return rows;
+
+      // Format label untuk konsistensi dengan format yang diharapkan frontend
+      return rows.map(row => ({
+        id: parseInt(row.id),
+        name: row.label, // Untuk kompatibilitas
+        label: row.label,
+        parent_id: row.parent_id ? parseInt(row.parent_id) : null,
+        parent_label: row.parent_label || null,
+        is_sublabel: row.parent_id !== null,
+        slug: row.slug || row.label.toLowerCase().replace(/\s+/g, '-').replace(/[^\w\-]+/g, ''),
+        is_active: row.is_active !== undefined ? !!row.is_active : true
+      }));
     });
 
     res.json(labels);

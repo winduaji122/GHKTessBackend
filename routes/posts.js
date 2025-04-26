@@ -14,6 +14,7 @@ const PostLabel = require('../models/PostLabel');
 
 // Middleware
 const authMiddleware = require('../middleware/authMiddleware');
+const { isAuthenticated } = authMiddleware;
 const { cacheMiddleware } = require('../middleware/cacheMiddleware');
 const { logger } = require('../utils/logger');
 
@@ -97,12 +98,22 @@ const validatePost = [
 router.get('/', cacheMiddleware(300), postController.getAllPosts);
 router.get('/featured', cacheMiddleware(300), postController.getFeaturedPosts);
 router.get('/spotlight', cacheMiddleware(300, 'spotlight-posts'), postController.getSpotlightPosts);
+router.get('/popular', cacheMiddleware(300, 'popular-posts'), postController.getPopularPosts);
 
 // 2. PUBLIC ROUTES dengan parameter
 router.get('/public/related/:id', postController.getRelatedPosts);
 router.get('/public/id/:id([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})',
   postController.getPublicPostById
 );
+
+// Mendapatkan statistik post (views, comments, likes) - hanya untuk pengguna terautentikasi
+router.get('/:id/stats', isAuthenticated, postController.getPostStats);
+
+// Increment views - untuk semua pengguna (terautentikasi atau tidak)
+router.post('/:id/increment-views', postController.incrementViews);
+
+// Endpoint untuk menambah view dari public post (tanpa autentikasi)
+router.post('/public/increment-views/:id', postController.incrementViews);
 router.get('/public/slug/:slug([^/]+)', (req, res, next) => {
   const { slug } = req.params;
   if (slug.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/)) {
@@ -147,13 +158,13 @@ router.get('/label/:labelSlug', (req, res, next) => {
       });
     }
 
-    // Cari label berdasarkan nama label (bukan slug)
+    // Cari label berdasarkan slug
     const connection = await require('../config/databaseConfig').getConnection();
     try {
-      // Cari label berdasarkan nama label
+      // Cari label berdasarkan slug
       const [labelRows] = await connection.query(`
-        SELECT * FROM unique_labels WHERE label = ?
-      `, [labelSlug]);
+        SELECT * FROM unique_labels WHERE slug = ? OR label = ?
+      `, [labelSlug, labelSlug]);
 
       if (labelRows.length === 0) {
         return res.status(404).json({
@@ -211,10 +222,10 @@ router.get('/by-label-slug/:labelSlug', async (req, res) => {
     // Cari label berdasarkan nama label (karena tidak ada kolom slug)
     const connection = await require('../config/databaseConfig').getConnection();
     try {
-      // Cari label berdasarkan nama label
+      // Cari label berdasarkan slug
       const [labelRows] = await connection.query(`
-        SELECT * FROM unique_labels WHERE label = ?
-      `, [labelSlug]);
+        SELECT * FROM unique_labels WHERE slug = ? OR label = ?
+      `, [labelSlug, labelSlug]);
 
       if (labelRows.length === 0) {
         return res.status(404).json({
@@ -354,6 +365,12 @@ router.get('/admin-featured',
   postController.getAdminFeaturedPost
 );
 
+router.get('/admin',
+  authMiddleware.isAuthenticated,
+  authMiddleware.isAdmin,
+  postController.getAllPostsAdmin
+);
+
 // 4. SPECIAL ADMIN ROUTES (Static/Non-Dynamic)
 router.put('/reset-featured',
   authMiddleware.isAuthenticated,
@@ -406,7 +423,7 @@ router.put('/:id',
       }
 
       // Siapkan data untuk update
-      const { title, content, status, publish_date, excerpt, is_featured, is_spotlight, slug } = req.body;
+      const { title, content, status, publish_date, excerpt, is_featured, is_spotlight, slug, tags, allow_comments } = req.body;
 
       const updateData = {
         title,
@@ -415,7 +432,9 @@ router.put('/:id',
         publish_date: publish_date || postToUpdate.publish_date,
         excerpt,
         is_featured: is_featured === '1' || is_featured === true ? 1 : 0,
-        is_spotlight: is_spotlight === '1' || is_spotlight === true ? 1 : 0
+        is_spotlight: is_spotlight === '1' || is_spotlight === true ? 1 : 0,
+        tags: tags !== undefined ? tags : postToUpdate.tags,
+        allow_comments: allow_comments !== undefined ? (allow_comments === '1' || allow_comments === true ? 1 : 0) : postToUpdate.allow_comments
       };
 
       // Handle slug

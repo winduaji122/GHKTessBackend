@@ -8,25 +8,25 @@ const { logger } = require('../utils/logger');
 const cleanupTokens = async () => {
   try {
     logger.info('Memulai proses cleanup token');
-    
+
     // Dapatkan jumlah token sebelum cleanup untuk reporting
     const beforeCount = await getTokenCount();
-    
+
     // Hapus token yang expired atau di-revoke
     const result = await executeQuery(`
-      DELETE FROM user_tokens 
-      WHERE expires_at < NOW() 
+      DELETE FROM user_tokens
+      WHERE expires_at < NOW()
       OR is_revoked = 1
     `);
-    
+
     const deletedCount = result.affectedRows || 0;
-    
-    logger.info('Token cleanup selesai', { 
-      deletedCount, 
+
+    logger.info('Token cleanup selesai', {
+      deletedCount,
       beforeCount,
       afterCount: beforeCount - deletedCount
     });
-    
+
     return {
       success: true,
       count: deletedCount
@@ -37,7 +37,7 @@ const cleanupTokens = async () => {
       stack: error.stack,
       code: error.code
     });
-    
+
     return {
       success: false,
       count: 0,
@@ -90,7 +90,7 @@ const getTokenCount = async () => {
 const getTokenStats = async () => {
   try {
     const stats = await executeQuery(`
-      SELECT 
+      SELECT
         COUNT(*) as total,
         SUM(CASE WHEN expires_at < NOW() THEN 1 ELSE 0 END) as expired,
         SUM(CASE WHEN is_revoked = 1 THEN 1 ELSE 0 END) as revoked,
@@ -98,7 +98,7 @@ const getTokenStats = async () => {
         SUM(CASE WHEN type = 'access' THEN 1 ELSE 0 END) as access_tokens
       FROM user_tokens
     `);
-    
+
     const statsData = stats[0] || {
       total: 0,
       expired: 0,
@@ -106,9 +106,9 @@ const getTokenStats = async () => {
       refresh_tokens: 0,
       access_tokens: 0
     };
-    
+
     logger.info('Token statistics retrieved', statsData);
-    
+
     return statsData;
   } catch (error) {
     logger.error('Gagal mendapatkan statistik token', {
@@ -132,19 +132,19 @@ const revokeUserTokens = async (userId) => {
     if (!userId) {
       throw new Error('User ID diperlukan');
     }
-    
+
     const result = await executeQuery(
-      `UPDATE user_tokens 
-      SET is_revoked = 1 
+      `UPDATE user_tokens
+      SET is_revoked = 1
       WHERE user_id = ?`,
       [userId]
     );
-    
-    logger.info('Token user di-revoke', { 
-      userId, 
-      affectedRows: result.affectedRows || 0 
+
+    logger.info('Token user di-revoke', {
+      userId,
+      affectedRows: result.affectedRows || 0
     });
-    
+
     return {
       success: true,
       count: result.affectedRows || 0
@@ -172,17 +172,17 @@ let cleanupInterval;
  * @param {number} interval - Interval dalam milidetik
  */
 const startCleanupSchedule = (interval = ONE_HOUR) => {
-  logger.info('Memulai jadwal cleanup', { id, intervalMinutes: interval/1000/60 });
+  logger.info('Memulai jadwal cleanup', { intervalMinutes: interval/1000/60 });
   if (cleanupInterval) {
     clearInterval(cleanupInterval);
   }
-  
+
   // Jalankan cleanup pertama kali
   cleanupTokens()
     .then(result => {
       if (result.success) {
-        logger.info('Cleanup awal berhasil', { 
-          deletedCount: result.count 
+        logger.info('Cleanup awal berhasil', {
+          deletedCount: result.count
         });
       }
     })
@@ -192,18 +192,18 @@ const startCleanupSchedule = (interval = ONE_HOUR) => {
         stack: error.stack
       });
     });
-  
+
   // Set interval untuk cleanup berikutnya
   cleanupInterval = setInterval(async () => {
     try {
       const stats = await getTokenStats();
       logger.info('Statistik token sebelum cleanup', stats);
-      
+
       const result = await cleanupTokens();
-      
+
       if (result.success) {
-        logger.info('Cleanup terjadwal berhasil', { 
-          deletedCount: result.count 
+        logger.info('Cleanup terjadwal berhasil', {
+          deletedCount: result.count
         });
       }
     } catch (error) {
@@ -213,12 +213,12 @@ const startCleanupSchedule = (interval = ONE_HOUR) => {
       });
     }
   }, interval);
-  
-  logger.info('Cleanup token dijadwalkan', { 
+
+  logger.info('Cleanup token dijadwalkan', {
     intervalMinutes: interval/1000/60,
     nextCleanup: new Date(Date.now() + interval).toISOString()
   });
-  
+
   return cleanupInterval;
 };
 

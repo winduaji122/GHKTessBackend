@@ -5,7 +5,19 @@ const dotenv = require('dotenv');
 
 // Load environment variables based on NODE_ENV
 const NODE_ENV = process.env.NODE_ENV || 'development';
-const envFile = NODE_ENV === 'production' ? '.env.production' : '.env';
+
+// Cek apakah ini produksi lokal atau produksi online
+let envFile = '.env';
+if (NODE_ENV === 'production') {
+  // Cek apakah file .env.production.local ada
+  const localProdPath = path.join(__dirname, '.env.production.local');
+  if (fs.existsSync(localProdPath)) {
+    envFile = '.env.production.local';
+  } else {
+    envFile = '.env.production';
+  }
+}
+
 const envPath = path.join(__dirname, envFile);
 
 // Check if env file exists

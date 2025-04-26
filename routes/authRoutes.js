@@ -137,6 +137,9 @@ const csrfProtection = csrf({
 // Public Routes (tidak perlu token)
 router.post('/register', authLimiter, validateRegistration, authController.register);
 
+// Endpoint untuk memeriksa apakah email terdaftar
+router.get('/check-email', authLimiter, authController.checkEmail);
+
 // Gunakan loginRateLimiterMiddleware khusus untuk endpoint login
 // CSRF protection dinonaktifkan sementara untuk debugging
 router.post('/login', loginRateLimiterMiddleware, /* csrfProtection, */ validateLogin, authController.login);
@@ -145,6 +148,7 @@ router.post('/login', loginRateLimiterMiddleware, /* csrfProtection, */ validate
 router.post('/refresh-token', authController.refreshToken);
 router.get('/refresh-token', authController.refreshToken);
 router.post('/google-login', authLimiter, authController.googleLogin);
+router.post('/google-callback', authLimiter, authController.googleCallback);
 router.get('/verify/:token', authController.verifyEmail);
 router.post('/forgot-password', emailLimiter, validateForgotPassword, authController.forgotPassword);
 router.post('/reset-password', authLimiter, validatePasswordReset, authController.resetPassword);
@@ -199,6 +203,46 @@ router.get('/validate-session', async (req, res) => {
     res.status(401).json({
       valid: false,
       code: 'SESSION_INVALID'
+    });
+  }
+});
+
+// Endpoint untuk mendapatkan profil user - harus di atas middleware admin
+router.get('/user-profile', authenticateJWT, async (req, res) => {
+  try {
+    await authController.getUserProfile(req, res);
+  } catch (error) {
+    logger.error(`Error getting user profile: ${error.message}`);
+    return res.status(500).json({
+      success: false,
+      message: 'Terjadi kesalahan saat mengambil data profil'
+    });
+  }
+});
+
+// Endpoint untuk update profil user - harus di atas middleware admin
+router.post('/update-profile', authenticateJWT, upload.single('profile_picture'), async (req, res) => {
+  console.log('Update profile request received:', { body: req.body, file: req.file });
+  try {
+    await authController.updateProfile(req, res);
+  } catch (error) {
+    logger.error(`Error updating profile: ${error.message}`);
+    return res.status(500).json({
+      success: false,
+      message: 'Terjadi kesalahan saat memperbarui profil'
+    });
+  }
+});
+
+// Endpoint untuk mengubah password - harus di atas middleware admin
+router.post('/change-password', authenticateJWT, async (req, res) => {
+  try {
+    await authController.changePassword(req, res);
+  } catch (error) {
+    logger.error(`Error changing password: ${error.message}`);
+    return res.status(500).json({
+      success: false,
+      message: 'Terjadi kesalahan saat mengubah password'
     });
   }
 });
@@ -460,44 +504,6 @@ router.post('/verify-token', async (req, res) => {
   }
 });
 
-// Endpoint untuk mendapatkan profil user
-router.get('/user-profile', authenticateJWT, async (req, res) => {
-  try {
-    await authController.getUserProfile(req, res);
-  } catch (error) {
-    logger.error(`Error getting user profile: ${error.message}`);
-    return res.status(500).json({
-      success: false,
-      message: 'Terjadi kesalahan saat mengambil data profil'
-    });
-  }
-});
-
-// Endpoint untuk update profil user
-router.post('/update-profile', authenticateJWT, upload.single('profile_picture'), async (req, res) => {
-  console.log('Update profile request received:', { body: req.body, file: req.file });
-  try {
-    await authController.updateProfile(req, res);
-  } catch (error) {
-    logger.error(`Error updating profile: ${error.message}`);
-    return res.status(500).json({
-      success: false,
-      message: 'Terjadi kesalahan saat memperbarui profil'
-    });
-  }
-});
-
-// Endpoint untuk mengubah password
-router.post('/change-password', authenticateJWT, async (req, res) => {
-  try {
-    await authController.changePassword(req, res);
-  } catch (error) {
-    logger.error(`Error changing password: ${error.message}`);
-    return res.status(500).json({
-      success: false,
-      message: 'Terjadi kesalahan saat mengubah password'
-    });
-  }
-});
+// Endpoint-endpoint profil user sudah dipindahkan ke atas middleware admin
 
 module.exports = router;

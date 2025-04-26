@@ -1,6 +1,9 @@
-const { RateLimiterRedis } = require('rate-limiter-flexible');
+const { RateLimiterRedis, RateLimiterMemory } = require('rate-limiter-flexible');
 const { redis } = require('../config/databaseConfig');
 const { logger } = require('./logger');
+
+// Cek apakah Redis diaktifkan
+const redisEnabled = process.env.REDIS_ENABLED === 'true';
 
 // Whitelist IP untuk pengujian dan development
 const WHITELIST_IPS = [
@@ -80,41 +83,82 @@ const RATE_LIMIT_CONFIG = {
 // Pilih konfigurasi berdasarkan environment
 const config = RATE_LIMIT_CONFIG[isProduction ? 'production' : 'development'];
 
-// Buat rate limiter umum
-const rateLimiter = new RateLimiterRedis({
-  storeClient: redis,
-  keyPrefix: 'middleware',
-  points: config.general.points,
-  duration: config.general.duration,
-  blockDuration: config.general.blockDuration,
-});
+// Buat rate limiter berdasarkan ketersediaan Redis
+let rateLimiter, csrfRateLimiter, authRateLimiter, loginRateLimiter;
 
-// Buat rate limiter khusus untuk endpoint CSRF token
-const csrfRateLimiter = new RateLimiterRedis({
-  storeClient: redis,
-  keyPrefix: 'csrf',
-  points: config.csrf.points,
-  duration: config.csrf.duration,
-  blockDuration: config.csrf.blockDuration,
-});
+if (redisEnabled && redis) {
+  logger.info('Initializing Redis-based rate limiters');
 
-// Buat rate limiter khusus untuk endpoint auth
-const authRateLimiter = new RateLimiterRedis({
-  storeClient: redis,
-  keyPrefix: 'auth',
-  points: config.auth.points,
-  duration: config.auth.duration,
-  blockDuration: config.auth.blockDuration,
-});
+  // Buat rate limiter umum dengan Redis
+  rateLimiter = new RateLimiterRedis({
+    storeClient: redis,
+    keyPrefix: 'middleware',
+    points: config.general.points,
+    duration: config.general.duration,
+    blockDuration: config.general.blockDuration,
+  });
 
-// Buat rate limiter khusus untuk endpoint login
-const loginRateLimiter = new RateLimiterRedis({
-  storeClient: redis,
-  keyPrefix: 'login',
-  points: config.login.points,
-  duration: config.login.duration,
-  blockDuration: config.login.blockDuration,
-});
+  // Buat rate limiter khusus untuk endpoint CSRF token dengan Redis
+  csrfRateLimiter = new RateLimiterRedis({
+    storeClient: redis,
+    keyPrefix: 'csrf',
+    points: config.csrf.points,
+    duration: config.csrf.duration,
+    blockDuration: config.csrf.blockDuration,
+  });
+
+  // Buat rate limiter khusus untuk endpoint auth dengan Redis
+  authRateLimiter = new RateLimiterRedis({
+    storeClient: redis,
+    keyPrefix: 'auth',
+    points: config.auth.points,
+    duration: config.auth.duration,
+    blockDuration: config.auth.blockDuration,
+  });
+
+  // Buat rate limiter khusus untuk endpoint login dengan Redis
+  loginRateLimiter = new RateLimiterRedis({
+    storeClient: redis,
+    keyPrefix: 'login',
+    points: config.login.points,
+    duration: config.login.duration,
+    blockDuration: config.login.blockDuration,
+  });
+} else {
+  logger.info('Redis disabled or unavailable, using memory-based rate limiters');
+
+  // Buat rate limiter umum dengan Memory
+  rateLimiter = new RateLimiterMemory({
+    keyPrefix: 'middleware',
+    points: config.general.points,
+    duration: config.general.duration,
+    blockDuration: config.general.blockDuration,
+  });
+
+  // Buat rate limiter khusus untuk endpoint CSRF token dengan Memory
+  csrfRateLimiter = new RateLimiterMemory({
+    keyPrefix: 'csrf',
+    points: config.csrf.points,
+    duration: config.csrf.duration,
+    blockDuration: config.csrf.blockDuration,
+  });
+
+  // Buat rate limiter khusus untuk endpoint auth dengan Memory
+  authRateLimiter = new RateLimiterMemory({
+    keyPrefix: 'auth',
+    points: config.auth.points,
+    duration: config.auth.duration,
+    blockDuration: config.auth.blockDuration,
+  });
+
+  // Buat rate limiter khusus untuk endpoint login dengan Memory
+  loginRateLimiter = new RateLimiterMemory({
+    keyPrefix: 'login',
+    points: config.login.points,
+    duration: config.login.duration,
+    blockDuration: config.login.blockDuration,
+  });
+}
 
 // Fungsi untuk memeriksa apakah IP ada dalam whitelist
 const isWhitelisted = (ip) => {

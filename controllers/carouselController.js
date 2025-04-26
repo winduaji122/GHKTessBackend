@@ -3,15 +3,34 @@ const { logger } = require('../utils/logger');
 const { uploadImage } = require('../utils/fileUpload');
 const path = require('path');
 const fs = require('fs');
+const { FALLBACK_CAROUSEL } = require('../data/fallbackData');
 
 // Get all active carousel slides
 exports.getAllSlides = async (req, res) => {
   try {
-    const slides = await Carousel.getAllSlides();
-    res.json({ success: true, slides });
+    try {
+      const slides = await Carousel.getAllSlides();
+      res.json({ success: true, slides });
+    } catch (dbError) {
+      logger.error('Database error in getAllSlides controller:', {
+        error: dbError.message,
+        stack: dbError.stack,
+        service: 'carousel-service'
+      });
+
+      // Gunakan fallback data jika terjadi error database
+      logger.warn('Using fallback data for carousel slides', { service: 'carousel-service' });
+      return res.json(FALLBACK_CAROUSEL);
+    }
   } catch (error) {
-    logger.error('Error in getAllSlides controller:', error);
-    res.status(500).json({ success: false, message: 'Terjadi kesalahan saat mengambil data carousel' });
+    logger.error('Error in getAllSlides controller:', {
+      error: error.message,
+      stack: error.stack,
+      service: 'carousel-service'
+    });
+
+    // Gunakan fallback data jika terjadi error
+    return res.json(FALLBACK_CAROUSEL);
   }
 };
 
@@ -53,7 +72,9 @@ exports.createSlide = async (req, res) => {
       link: req.body.link || null,
       button_text: req.body.button_text || 'Selengkapnya',
       active: req.body.active === undefined ? 1 : req.body.active,
-      sort_order: req.body.sort_order || 0
+      sort_order: req.body.sort_order || 0,
+      post_id: req.body.postId || req.body.post_id || null,
+      postType: req.body.postType || 'carousel'
     };
 
     // Handle image upload
@@ -76,6 +97,9 @@ exports.createSlide = async (req, res) => {
     } else if (req.body.image_url) {
       // If image is provided as URL
       slideData.image_url = req.body.image_url;
+    } else if (slideData.post_id) {
+      // If post_id is provided, we'll get the image from the post
+      // No need to return error here as the image will be fetched from the post
     } else {
       return res.status(400).json({ success: false, message: 'Gambar slide diperlukan' });
     }
@@ -105,7 +129,8 @@ exports.updateSlide = async (req, res) => {
       link: req.body.link !== undefined ? req.body.link : existingSlide.link,
       button_text: req.body.button_text || existingSlide.button_text,
       active: req.body.active !== undefined ? req.body.active : existingSlide.active,
-      sort_order: req.body.sort_order !== undefined ? req.body.sort_order : existingSlide.sort_order
+      sort_order: req.body.sort_order !== undefined ? req.body.sort_order : existingSlide.sort_order,
+      post_id: req.body.post_id !== undefined ? req.body.post_id : existingSlide.post_id
     };
 
     // Handle image upload
@@ -186,5 +211,43 @@ exports.updateSlidesOrder = async (req, res) => {
   } catch (error) {
     logger.error('Error in updateSlidesOrder controller:', error);
     res.status(500).json({ success: false, message: 'Terjadi kesalahan saat memperbarui urutan slide' });
+  }
+};
+
+// Replace slide with post (carousel or regular)
+exports.replaceSlideWithPost = async (req, res) => {
+  try {
+    const { slideId } = req.params;
+    const { postId, postType = 'carousel' } = req.body;
+
+    if (!slideId || !postId) {
+      return res.status(400).json({ success: false, message: 'ID slide dan ID post diperlukan' });
+    }
+
+    // Check if slide exists
+    const slide = await Carousel.getSlideById(slideId);
+    if (!slide) {
+      return res.status(404).json({ success: false, message: 'Slide tidak ditemukan' });
+    }
+
+    try {
+      await Carousel.replaceSlideWithPost(slideId, postId, postType);
+
+      const message = postType === 'carousel'
+        ? 'Slide berhasil diganti dengan post carousel'
+        : 'Slide berhasil diganti dengan post reguler';
+
+      res.json({ success: true, message });
+    } catch (validationError) {
+      // Tangkap error validasi dari model
+      logger.warn('Validation error in replaceSlideWithPost:', validationError.message);
+      return res.status(400).json({
+        success: false,
+        message: validationError.message || 'Post tidak memenuhi syarat untuk dijadikan slide'
+      });
+    }
+  } catch (error) {
+    logger.error('Error in replaceSlideWithPost controller:', error);
+    res.status(500).json({ success: false, message: 'Terjadi kesalahan saat mengganti slide dengan post' });
   }
 };

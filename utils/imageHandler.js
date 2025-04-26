@@ -8,7 +8,17 @@ const { uploadDir } = require('../uploadConfig');
 const formatImageUrl = (imagePath) => {
   if (!imagePath) return null;
   if (imagePath.startsWith('http')) return imagePath;
-  return `${process.env.BASE_URL}/uploads/${path.basename(imagePath)}`;
+
+  // Fix double uploads in path
+  if (imagePath.includes('/uploads/uploads/')) {
+    imagePath = imagePath.replace('/uploads/uploads/', '/uploads/');
+  }
+
+  if (imagePath.startsWith('/uploads/')) {
+    return `${process.env.API_URL || process.env.BASE_URL || 'http://localhost:5000'}${imagePath}`;
+  }
+
+  return `${process.env.API_URL || process.env.BASE_URL || 'http://localhost:5000'}/uploads/${path.basename(imagePath)}`;
 };
 
 // Optimize and save image
@@ -34,7 +44,7 @@ const optimizeAndSaveImage = async (file) => {
       .toFile(outputPath);
 
     await new Promise(resolve => setTimeout(resolve, 1000));
-    
+
     try {
       await fs.unlink(file.path);
     } catch (unlinkError) {
@@ -43,11 +53,11 @@ const optimizeAndSaveImage = async (file) => {
         file: file.path
       });
     }
-    
+
     logger.info('Image optimization completed', {
       filename: optimizedFileName
     });
-    
+
     return optimizedFileName;
   } catch (error) {
     logger.error('Image optimization failed', {
@@ -55,7 +65,7 @@ const optimizeAndSaveImage = async (file) => {
       stack: error.stack,
       file: file?.originalname
     });
-    
+
     return file?.filename || null;
   }
 };
@@ -66,7 +76,7 @@ const deleteImageFile = async (filename) => {
     logger.warn('No filename provided for deletion');
     return false;
   }
-  
+
   const filepath = path.join(uploadDir, path.basename(filename));
   try {
     await fs.access(filepath);
@@ -74,9 +84,9 @@ const deleteImageFile = async (filename) => {
     logger.info('File deleted successfully', { filename });
     return true;
   } catch (error) {
-    logger.warn('File deletion failed', { 
+    logger.warn('File deletion failed', {
       filename,
-      error: error.message 
+      error: error.message
     });
     return false;
   }
@@ -94,9 +104,9 @@ const validateImage = async (imagePath) => {
     logger.info('Image validated successfully', { imagePath });
     return true;
   } catch (error) {
-    logger.warn('Image validation failed', { 
+    logger.warn('Image validation failed', {
       imagePath,
-      error: error.message 
+      error: error.message
     });
     return false;
   }
@@ -107,4 +117,4 @@ module.exports = {
   optimizeAndSaveImage,
   deleteImageFile,
   validateImage
-}; 
+};

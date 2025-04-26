@@ -3,6 +3,7 @@ const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 const { sendVerificationEmail, sendAdminApprovalRequest, sendApprovalNotification, sendNotificationEmail, sendTokenRefreshNotification, sendPasswordResetEmail } = require('../utils/emailService');
 const { verifyGoogleToken } = require('../config/googleAuth');
+const axios = require('axios');
 const { logger } = require('../utils/logger');
 const crypto = require('crypto');
 const isProduction = process.env.NODE_ENV === 'production';
@@ -12,19 +13,30 @@ const { executeQuery } = require('../config/databaseConfig');
 const { v4: uuidv4 } = require('uuid');
 const { createClient } = require('redis');
 
-// Inisialisasi Redis
-const redisClient = createClient({
-  url: process.env.REDIS_URL
-});
+// Inisialisasi Redis jika diaktifkan
+let redisClient = null;
+if (process.env.REDIS_ENABLED === 'true') {
+  redisClient = createClient({
+    url: process.env.REDIS_URL
+  });
 
-redisClient.on('error', (err) => {
-  console.error('Redis Client Error', err);
-});
+  redisClient.on('error', (err) => {
+    console.error('Redis Client Error in authController:', err);
+  });
 
-// Koneksi sync
-(async () => {
-  await redisClient.connect();
-})();
+  // Koneksi sync
+  (async () => {
+    try {
+      await redisClient.connect();
+      console.log('Redis connected in authController');
+    } catch (error) {
+      console.error('Failed to connect to Redis in authController:', error);
+      redisClient = null;
+    }
+  })();
+} else {
+  console.log('Redis disabled in authController');
+}
 
 // Konstanta untuk pesan error
 const ERROR_MESSAGES = {
@@ -269,6 +281,11 @@ exports.register = async (req, res) => {
       return res.status(400).json({ message: 'Username sudah digunakan' });
     }
 
+    // Tentukan apakah user perlu approval dan verifikasi berdasarkan role
+    const isWriter = role === 'writer';
+    const isUser = role === 'user';
+    const needsApproval = isWriter;
+
     // Lanjutkan dengan pembuatan user jika email dan username unik
     const createUserStartTime = Date.now();
     const newUser = await executeQuery(async (connection) => {
@@ -277,22 +294,28 @@ exports.register = async (req, res) => {
         email,
         password,
         name,
-        role: role || 'pending',
-        is_approved: false,
-        is_verified: false
+        role: isWriter ? 'pending' : role,
+        is_approved: !needsApproval, // User biasa langsung diapprove
+        is_verified: isUser // User biasa langsung diverifikasi
       }, connection);
     });
     logger.info(`User creation completed in ${Date.now() - createUserStartTime}ms`);
 
-    const verificationLink = `${process.env.FRONTEND_URL}/verify/${newUser.verificationToken}`;
-    logger.info(`Verification link generated: ${verificationLink}`);
+    // Jika user adalah writer, kirim email verifikasi dan notifikasi admin
+    if (isWriter) {
+      const verificationLink = `${process.env.FRONTEND_URL}/verify/${newUser.verificationToken}`;
+      logger.info(`Verification link generated: ${verificationLink}`);
 
-    const sendEmailStartTime = Date.now();
-    await sendVerificationEmail(newUser.email, verificationLink);
-    logger.info(`Verification email sent in ${Date.now() - sendEmailStartTime}ms`);
+      const sendEmailStartTime = Date.now();
+      await sendVerificationEmail(newUser.email, verificationLink);
+      logger.info(`Verification email sent in ${Date.now() - sendEmailStartTime}ms`);
 
-    await sendAdminApprovalRequest(newUser.email);
-    res.status(201).json({ message: 'Pendaftaran berhasil. Akun Anda sedang menunggu persetujuan admin.' });
+      await sendAdminApprovalRequest(newUser.email);
+      res.status(201).json({ message: 'Pendaftaran berhasil. Akun Anda sedang menunggu persetujuan admin.' });
+    } else {
+      // Jika user biasa, langsung berhasil tanpa perlu verifikasi dan approval
+      res.status(201).json({ message: 'Pendaftaran berhasil. Anda dapat login sekarang.' });
+    }
   } catch (error) {
     logger.error(`Registration error: ${error.message}`, { error });
     logger.error(`Stack trace: ${error.stack}`);
@@ -374,6 +397,35 @@ exports.approveWriter = async (req, res) => {
   } catch (error) {
     logger.error('Error in approveWriter:', error);
     res.status(500).json({ message: 'Terjadi kesalahan saat menyetujui penulis' });
+  }
+};
+
+exports.checkEmail = async (req, res) => {
+  try {
+    const { email } = req.query;
+
+    if (!email) {
+      return res.status(400).json({
+        success: false,
+        message: 'Email diperlukan'
+      });
+    }
+
+    logger.info(`Checking if email exists: ${email}`);
+
+    // Cari user berdasarkan email
+    const user = await User.findByEmail(email);
+
+    return res.status(200).json({
+      success: true,
+      exists: !!user
+    });
+  } catch (error) {
+    logger.error('Check email error:', error);
+    return res.status(500).json({
+      success: false,
+      message: ERROR_MESSAGES.SERVER_ERROR
+    });
   }
 };
 
@@ -518,9 +570,120 @@ exports.login = async (req, res) => {
   }
 };
 
+exports.googleCallback = async (req, res) => {
+  try {
+    const { code } = req.body;
+
+    if (!code) {
+      return res.status(400).json({ message: 'Code is required' });
+    }
+
+    // Exchange code for token
+    const tokenResponse = await axios.post('https://oauth2.googleapis.com/token', {
+      code,
+      client_id: process.env.GOOGLE_CLIENT_ID,
+      client_secret: process.env.GOOGLE_CLIENT_SECRET,
+      redirect_uri: `${process.env.FRONTEND_URL}/oauth2callback`,
+      grant_type: 'authorization_code'
+    });
+
+    const { id_token } = tokenResponse.data;
+
+    // Verify ID token
+    const payload = await verifyGoogleToken(id_token);
+
+    // Find user by email or Google ID
+    let user = await User.findByEmail(payload.email);
+    if (!user) {
+      user = await User.findByGoogleId(payload.sub);
+    }
+
+    if (!user) {
+      // Create new user if not registered
+      const randomPassword = crypto.randomBytes(20).toString('hex');
+
+      // Create unique username from email
+      let username = payload.email.split('@')[0];
+      const existingUser = await User.findByUsername(username);
+      if (existingUser) {
+        username = `${username}-${Math.floor(Math.random() * 10000)}`;
+      }
+
+      user = await User.create({
+        username,
+        email: payload.email,
+        name: payload.name,
+        password: randomPassword,
+        google_id: payload.sub,
+        profile_picture: payload.picture,
+        is_verified: true,
+        is_approved: true,
+        role: 'user'
+      });
+
+      logger.info(`User created with Google callback: ${user.id}, Email: ${user.email}`);
+    } else {
+      // Update Google ID if not exists
+      if (!user.google_id) {
+        await User.updateGoogleId(user.id, payload.sub);
+      }
+
+      // Update profile picture if not exists
+      if (!user.profile_picture && payload.picture) {
+        await User.updateProfilePicture(user.id, payload.picture);
+        user.profile_picture = payload.picture;
+      }
+    }
+
+    // Check if user is pending
+    if (user.role === 'pending') {
+      return res.status(403).json({
+        message: 'Akun Anda sedang menunggu persetujuan admin.',
+        requiresApproval: true
+      });
+    }
+
+    // Generate token
+    const accessToken = jwt.sign(
+      { id: user.id, role: user.role },
+      process.env.JWT_SECRET,
+      { expiresIn: '1h' }
+    );
+
+    const refreshToken = uuidv4();
+
+    // Save refresh token
+    await User.saveRefreshToken(
+      user.id,
+      refreshToken,
+      new Date(Date.now() + TOKEN_CONFIG.REFRESH.expiresIn * 1000)
+    );
+
+    // Set cookie
+    res.cookie('refreshToken', refreshToken, COOKIE_CONFIG);
+
+    // Send response
+    res.status(200).json({
+      success: true,
+      accessToken,
+      user: {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        username: user.username,
+        profile_picture: user.profile_picture
+      }
+    });
+  } catch (error) {
+    logger.error(`Error dalam Google callback: ${error.message}`, error);
+    res.status(500).json({ message: 'Terjadi kesalahan saat login dengan Google' });
+  }
+};
+
 exports.googleLogin = async (req, res) => {
   try {
-    const { token } = req.body;
+    const { token, role } = req.body;
 
     if (!token) {
       return res.status(400).json({ message: 'Token Google tidak ditemukan' });
@@ -529,34 +692,65 @@ exports.googleLogin = async (req, res) => {
     // Verifikasi token Google
     const payload = await verifyGoogleToken(token);
 
-    // Cari user berdasarkan email
+    // Cari user berdasarkan email atau google_id
     let user = await User.findByEmail(payload.email);
+    if (!user) {
+      // Cari berdasarkan google_id
+      user = await User.findByGoogleId(payload.sub);
+    }
 
     if (!user) {
       // Buat user baru jika belum terdaftar
       const randomPassword = crypto.randomBytes(20).toString('hex');
+      const isWriter = role === 'writer';
+      const needsApproval = isWriter;
+
+      // Buat username unik dari email
+      let username = payload.email.split('@')[0];
+      // Cek apakah username sudah ada
+      const existingUser = await User.findByUsername(username);
+      if (existingUser) {
+        // Tambahkan random string ke username
+        username = `${username}-${Math.floor(Math.random() * 10000)}`;
+      }
+
+      // Gunakan URL gambar dari Google sebagai profile_picture
+      const profilePicture = payload.picture ? payload.picture : null;
 
       user = await User.create({
-        username: payload.email.split('@')[0],
+        username: username,
         email: payload.email,
         name: payload.name,
         password: randomPassword,
-        profile_picture: payload.picture,
+        google_id: payload.sub,
+        profile_picture: profilePicture,
         is_verified: true, // User Google sudah terverifikasi
-        is_approved: false, // Tetap perlu persetujuan admin jika writer
-        role: 'user' // Default role
+        is_approved: !needsApproval, // User biasa langsung diapprove
+        role: isWriter ? 'pending' : (role || 'user') // Default role
       });
 
+      logger.info(`User created with Google login: ${user.id}, Email: ${user.email}, Role: ${isWriter ? 'pending' : (role || 'user')}, Profile Picture: ${profilePicture}`);
+
       // Jika mendaftar sebagai writer, kirim notifikasi ke admin
-      if (req.body.role === 'writer') {
-        user.role = 'pending';
-        await User.update(user.id, { role: 'pending' });
+      if (isWriter) {
         await sendAdminApprovalRequest(user.email);
 
         return res.status(200).json({
           message: 'Registrasi berhasil. Akun Anda sedang menunggu persetujuan admin.',
           requiresApproval: true
         });
+      }
+    } else {
+      // Update google_id jika belum ada
+      if (!user.google_id) {
+        await User.updateGoogleId(user.id, payload.sub);
+      }
+
+      // Update profile_picture jika belum ada tapi ada dari Google
+      if (!user.profile_picture && payload.picture) {
+        await User.updateProfilePicture(user.id, payload.picture);
+        user.profile_picture = payload.picture;
+        logger.info(`Updated profile picture for user ${user.id} from Google`);
       }
     }
 
@@ -595,13 +789,27 @@ exports.googleLogin = async (req, res) => {
         id: user.id,
         name: user.name,
         email: user.email,
-        role: user.role
+        role: user.role,
+        username: user.username,
+        profile_picture: user.profile_picture
       }
     });
 
   } catch (error) {
-    logger.error('Error dalam Google login:', error);
-    res.status(500).json({ message: 'Terjadi kesalahan saat login dengan Google' });
+    logger.error(`Error dalam Google login: ${error.message}`, error);
+
+    // Berikan pesan error yang lebih spesifik
+    let errorMessage = 'Terjadi kesalahan saat login dengan Google';
+
+    if (error.message === 'Invalid Google token') {
+      errorMessage = 'Token Google tidak valid. Silakan coba lagi.';
+    } else if (error.message === 'No token provided') {
+      errorMessage = 'Token Google tidak ditemukan. Silakan coba lagi.';
+    } else if (error.message === 'Invalid payload') {
+      errorMessage = 'Data dari Google tidak valid. Silakan coba lagi.';
+    }
+
+    res.status(500).json({ message: errorMessage });
   }
 };
 
