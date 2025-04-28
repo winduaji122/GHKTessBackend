@@ -11,7 +11,7 @@ const dbConfig = {
   password: process.env.DB_PASSWORD,
   database: process.env.DB_NAME,
   waitForConnections: true, // Tunggu koneksi jika tidak tersedia
-  connectionLimit: 10, // Tingkatkan batas koneksi untuk database lokal
+  connectionLimit: 4, // Batasi koneksi untuk menghindari max_user_connections
   idleTimeout: 60000, // 60 detik timeout untuk koneksi idle
   queueLimit: 20, // Tingkatkan batas antrian untuk menangani lebih banyak permintaan bersamaan
   enableKeepAlive: true, // Aktifkan keepalive untuk database lokal
@@ -33,7 +33,7 @@ if (process.env.DB_SSL === 'true') {
   console.log('SSL enabled for database connection with rejectUnauthorized: false');
 }
 
-const pool = mysql.createPool(dbConfig);
+let pool = mysql.createPool(dbConfig);
 
 pool.on('acquire', function (connection) {
   logger.info(`Connection ${connection.threadId} acquired`);
@@ -991,9 +991,16 @@ async function handleLostConnection() {
   }
 }
 
-// Jalankan penanganan koneksi yang hilang setiap 5 menit
+// Jalankan penanganan koneksi yang hilang setiap 10 menit untuk mengurangi beban
 const connectionCheckInterval = setInterval(async () => {
   try {
+    // Cek apakah pool sudah ditutup
+    if (pool.pool && pool.pool._closed) {
+      logger.warn('Pool is closed, attempting to recreate...', { service: 'database-service' });
+      await handleLostConnection();
+      return;
+    }
+
     // Coba buat koneksi untuk memverifikasi bahwa database masih dapat diakses
     const testConnection = await pool.getConnection();
     testConnection.release();
@@ -1011,7 +1018,7 @@ const connectionCheckInterval = setInterval(async () => {
     // Jika gagal, coba tangani koneksi yang hilang
     await handleLostConnection();
   }
-}, 300000); // 5 menit
+}, 600000); // 10 menit
 
 // Pastikan interval dibersihkan saat aplikasi berhenti
 process.on('SIGINT', () => {
