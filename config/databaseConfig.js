@@ -11,8 +11,8 @@ const dbConfig = {
   password: process.env.DB_PASSWORD,
   database: process.env.DB_NAME,
   waitForConnections: true, // Tunggu koneksi jika tidak tersedia
-  connectionLimit: 4, // Batasi koneksi untuk menghindari max_user_connections
-  idleTimeout: 60000, // 60 detik timeout untuk koneksi idle
+  connectionLimit: 2, // Batasi koneksi untuk menghindari max_user_connections
+  idleTimeout: 30000, // 30 detik timeout untuk koneksi idle
   queueLimit: 20, // Tingkatkan batas antrian untuk menangani lebih banyak permintaan bersamaan
   enableKeepAlive: true, // Aktifkan keepalive untuk database lokal
   keepAliveInitialDelay: 10000, // 10 detik delay awal untuk keepalive
@@ -168,7 +168,7 @@ async function getConnection() {
 
 const executeQuery = async (queryOrCallback, params = [], retryCount = 0) => {
   const MAX_RETRIES = 5;
-  const RETRY_DELAY = 1000; // ms
+  const BASE_RETRY_DELAY = 2000; // ms - Tingkatkan dari 1000 menjadi 2000 ms
   const ACQUIRE_TIMEOUT = 15000; // ms - Sesuaikan dengan acquireTimeout di dbConfig
 
   let connection = null;
@@ -231,7 +231,14 @@ const executeQuery = async (queryOrCallback, params = [], retryCount = 0) => {
            connError.message.includes('ECONNREFUSED') ||
            connError.message.includes('Queue limit reached'))) {
         logger.info(`Retrying database connection (${retryCount + 1}/${MAX_RETRIES})...`, { service: 'database-service' });
-        await new Promise(resolve => setTimeout(resolve, RETRY_DELAY * Math.pow(2, retryCount)));
+
+        // Gunakan backoff eksponensial dengan jitter untuk mengurangi tekanan pada database
+        const jitter = Math.random() * 1000; // Tambahkan jitter acak hingga 1 detik
+        const delay = (BASE_RETRY_DELAY * Math.pow(2, retryCount)) + jitter;
+
+        logger.info(`Waiting ${Math.round(delay / 1000)} seconds before retry...`, { service: 'database-service' });
+        await new Promise(resolve => setTimeout(resolve, delay));
+
         return executeQuery(queryOrCallback, params, retryCount + 1);
       }
 
@@ -1001,6 +1008,9 @@ const connectionCheckInterval = setInterval(async () => {
       return;
     }
 
+    // Bersihkan koneksi idle setiap kali interval berjalan
+    await cleanupIdleConnections();
+
     // Coba buat koneksi untuk memverifikasi bahwa database masih dapat diakses
     const testConnection = await pool.getConnection();
     testConnection.release();
@@ -1020,9 +1030,22 @@ const connectionCheckInterval = setInterval(async () => {
   }
 }, 600000); // 10 menit
 
+// Jalankan pembersihan koneksi idle lebih sering (setiap 2 menit)
+const idleConnectionCleanupInterval = setInterval(async () => {
+  try {
+    await cleanupIdleConnections();
+  } catch (error) {
+    logger.error('Error in idle connection cleanup interval:', {
+      error: error.message,
+      service: 'database-service'
+    });
+  }
+}, 120000); // 2 menit
+
 // Pastikan interval dibersihkan saat aplikasi berhenti
 process.on('SIGINT', () => {
-  clearInterval(cleanupInterval);
+  clearInterval(connectionCheckInterval);
+  clearInterval(idleConnectionCleanupInterval);
   clearInterval(connectionCheckInterval);
   logger.info('All intervals cleared', { service: 'database-service' });
   process.exit(0);
