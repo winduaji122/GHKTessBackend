@@ -7,46 +7,63 @@ const { v4: uuidv4 } = require('uuid');
 // Deteksi Railway environment
 const isRailway = process.env.RAILWAY_STATIC_URL || process.env.RAILWAY_SERVICE_ID;
 
-// MySQL configuration
-const dbConfig = {
-  host: process.env.DB_HOST,
-  port: process.env.DB_PORT || 3306,
-  user: process.env.DB_USER,
-  password: process.env.DB_PASSWORD,
-  database: process.env.DB_NAME,
-  waitForConnections: true, // Tunggu koneksi jika tidak tersedia
-  connectionLimit: isRailway ? 5 : 2, // Tingkatkan batas koneksi untuk Railway
-  idleTimeout: 60000, // 60 detik timeout untuk koneksi idle
-  queueLimit: 0, // Tidak ada batas antrian
-  enableKeepAlive: true, // Aktifkan keepalive
-  keepAliveInitialDelay: 10000, // 10 detik delay awal untuk keepalive
-  multipleStatements: false, // Nonaktifkan multiple statements untuk keamanan
-  connectTimeout: 60000, // 60 detik timeout koneksi
-  acquireTimeout: 60000, // 60 detik timeout untuk mendapatkan koneksi dari pool
-  timeout: 60000, // 60 detik timeout untuk query
-  decimalNumbers: true, // Konversi nilai desimal ke JavaScript number
-  dateStrings: true, // Kembalikan tanggal sebagai string
-  namedPlaceholders: true, // Gunakan placeholder bernama untuk query yang lebih jelas
-  // Tambahkan dukungan untuk caching_sha2_password
-  authPlugins: {
-    mysql_native_password: () => () => Buffer.from([0]),
-    caching_sha2_password: () => () => Buffer.from([0])
-  }
-};
-
-// Tambahkan SSL jika diperlukan
-if (process.env.DB_SSL === 'true') {
-  dbConfig.ssl = {
-    // Untuk koneksi eksternal, kita perlu menerima sertifikat self-signed
-    rejectUnauthorized: false
+// Fungsi untuk membuat konfigurasi database
+function createDbConfig(host, port, user, password, database, ssl) {
+  return {
+    host: host,
+    port: port || 3306,
+    user: user,
+    password: password,
+    database: database,
+    waitForConnections: true, // Tunggu koneksi jika tidak tersedia
+    connectionLimit: isRailway ? 5 : 2, // Tingkatkan batas koneksi untuk Railway
+    idleTimeout: 60000, // 60 detik timeout untuk koneksi idle
+    queueLimit: 0, // Tidak ada batas antrian
+    enableKeepAlive: true, // Aktifkan keepalive
+    keepAliveInitialDelay: 10000, // 10 detik delay awal untuk keepalive
+    multipleStatements: false, // Nonaktifkan multiple statements untuk keamanan
+    connectTimeout: 60000, // 60 detik timeout koneksi
+    acquireTimeout: 60000, // 60 detik timeout untuk mendapatkan koneksi dari pool
+    timeout: 60000, // 60 detik timeout untuk query
+    decimalNumbers: true, // Konversi nilai desimal ke JavaScript number
+    dateStrings: true, // Kembalikan tanggal sebagai string
+    namedPlaceholders: true, // Gunakan placeholder bernama untuk query yang lebih jelas
+    // Tambahkan dukungan untuk caching_sha2_password
+    authPlugins: {
+      mysql_native_password: () => () => Buffer.from([0]),
+      caching_sha2_password: () => () => Buffer.from([0])
+    },
+    // Tambahkan SSL jika diperlukan
+    ...(ssl === 'true' ? {
+      ssl: {
+        rejectUnauthorized: false
+      }
+    } : {})
   };
-  console.log('SSL enabled for database connection with rejectUnauthorized: false');
-} else {
-  console.log('SSL disabled for database connection');
 }
 
+// Konfigurasi utama
+const dbConfig = createDbConfig(
+  process.env.DB_HOST,
+  process.env.DB_PORT,
+  process.env.DB_USER,
+  process.env.DB_PASSWORD,
+  process.env.DB_NAME,
+  process.env.DB_SSL
+);
+
+// Konfigurasi fallback
+const fallbackDbConfig = process.env.DB_FALLBACK_HOST ? createDbConfig(
+  process.env.DB_FALLBACK_HOST,
+  process.env.DB_FALLBACK_PORT,
+  process.env.DB_FALLBACK_USER,
+  process.env.DB_FALLBACK_PASSWORD,
+  process.env.DB_FALLBACK_NAME,
+  process.env.DB_FALLBACK_SSL
+) : null;
+
 // Log konfigurasi database
-console.log('Database configuration:', {
+console.log('Primary database configuration:', {
   host: process.env.DB_HOST,
   port: process.env.DB_PORT,
   user: process.env.DB_USER ? `${process.env.DB_USER.substring(0, 2)}...` : 'Not set',
@@ -55,7 +72,20 @@ console.log('Database configuration:', {
   railway: isRailway ? 'true' : 'false'
 });
 
+if (fallbackDbConfig) {
+  console.log('Fallback database configuration available:', {
+    host: process.env.DB_FALLBACK_HOST,
+    port: process.env.DB_FALLBACK_PORT,
+    user: process.env.DB_FALLBACK_USER ? `${process.env.DB_FALLBACK_USER.substring(0, 2)}...` : 'Not set',
+    database: process.env.DB_FALLBACK_NAME,
+    ssl: process.env.DB_FALLBACK_SSL === 'true' ? 'enabled' : 'disabled'
+  });
+}
+
+// Buat pool koneksi utama
 let pool = mysql.createPool(dbConfig);
+let fallbackPool = fallbackDbConfig ? mysql.createPool(fallbackDbConfig) : null;
+let usingFallback = false;
 
 pool.on('acquire', function (connection) {
   logger.info(`Connection ${connection.threadId} acquired`);
@@ -185,28 +215,44 @@ const cacheKeys = {
 
 // MySQL functions
 async function getConnection() {
-  return await pool.getConnection();
+  try {
+    // Coba dapatkan koneksi dari pool utama
+    return await pool.getConnection();
+  } catch (error) {
+    // Jika gagal dan fallbackPool tersedia, coba dapatkan koneksi dari fallbackPool
+    if (fallbackPool && (
+      error.message.includes('Access denied') ||
+      error.message.includes('ETIMEDOUT') ||
+      error.message.includes('ECONNREFUSED')
+    )) {
+      logger.info('Switching to fallback database connection in getConnection', { service: 'database-service' });
+      usingFallback = true;
+      return await fallbackPool.getConnection();
+    }
+    throw error;
+  }
 }
 
 const executeQuery = async (queryOrCallback, params = [], retryCount = 0) => {
   const MAX_RETRIES = 5;
   const BASE_RETRY_DELAY = 2000; // ms - Tingkatkan dari 1000 menjadi 2000 ms
-  const ACQUIRE_TIMEOUT = 15000; // ms - Sesuaikan dengan acquireTimeout di dbConfig
 
   let connection = null;
   let connectionAcquired = false;
   let result = null;
+  let currentPool = usingFallback && fallbackPool ? fallbackPool : pool;
 
   try {
     // Dapatkan koneksi dari pool
     try {
-      connection = await pool.getConnection();
+      connection = await currentPool.getConnection();
       connectionAcquired = true;
 
-      // Log koneksi yang berhasil didapatkan (hanya jika debug diaktifkan)
-      if (process.env.DEBUG_DB === 'true') {
-        logger.info(`Connection ${connection.threadId} acquired`, { service: 'database-service' });
-      }
+      // Log koneksi yang berhasil didapatkan
+      logger.info(`Connection ${connection.threadId} acquired from ${usingFallback ? 'fallback' : 'primary'} pool`, {
+        service: 'database-service',
+        usingFallback
+      });
 
       // Jika queryOrCallback adalah fungsi, jalankan dengan connection
       if (typeof queryOrCallback === 'function') {
@@ -216,7 +262,8 @@ const executeQuery = async (queryOrCallback, params = [], retryCount = 0) => {
           logger.error('Error executing function with connection:', {
             error: funcError.message,
             stack: funcError.stack,
-            service: 'database-service'
+            service: 'database-service',
+            usingFallback
           });
           throw funcError;
         }
@@ -229,7 +276,8 @@ const executeQuery = async (queryOrCallback, params = [], retryCount = 0) => {
           logger.error('Error executing query:', {
             error: queryError.message,
             query: typeof queryOrCallback === 'string' ? queryOrCallback.substring(0, 100) + '...' : 'Function',
-            service: 'database-service'
+            service: 'database-service',
+            usingFallback
           });
           throw queryError;
         }
@@ -242,8 +290,20 @@ const executeQuery = async (queryOrCallback, params = [], retryCount = 0) => {
         error: connError.message,
         stack: connError.stack,
         retryCount,
-        service: 'database-service'
+        service: 'database-service',
+        usingFallback
       });
+
+      // Coba gunakan fallback pool jika tersedia dan belum digunakan
+      if (!usingFallback && fallbackPool && (
+        connError.message.includes('Access denied') ||
+        connError.message.includes('ETIMEDOUT') ||
+        connError.message.includes('ECONNREFUSED')
+      )) {
+        logger.info('Switching to fallback database connection', { service: 'database-service' });
+        usingFallback = true;
+        return executeQuery(queryOrCallback, params, 0); // Reset retry count
+      }
 
       // Retry logic for connection errors
       if (retryCount < MAX_RETRIES &&
@@ -252,13 +312,19 @@ const executeQuery = async (queryOrCallback, params = [], retryCount = 0) => {
            connError.message.includes('ETIMEDOUT') ||
            connError.message.includes('ECONNREFUSED') ||
            connError.message.includes('Queue limit reached'))) {
-        logger.info(`Retrying database connection (${retryCount + 1}/${MAX_RETRIES})...`, { service: 'database-service' });
+        logger.info(`Retrying database connection (${retryCount + 1}/${MAX_RETRIES})...`, {
+          service: 'database-service',
+          usingFallback
+        });
 
         // Gunakan backoff eksponensial dengan jitter untuk mengurangi tekanan pada database
         const jitter = Math.random() * 1000; // Tambahkan jitter acak hingga 1 detik
         const delay = (BASE_RETRY_DELAY * Math.pow(2, retryCount)) + jitter;
 
-        logger.info(`Waiting ${Math.round(delay / 1000)} seconds before retry...`, { service: 'database-service' });
+        logger.info(`Waiting ${Math.round(delay / 1000)} seconds before retry...`, {
+          service: 'database-service',
+          usingFallback
+        });
         await new Promise(resolve => setTimeout(resolve, delay));
 
         return executeQuery(queryOrCallback, params, retryCount + 1);
@@ -275,7 +341,8 @@ const executeQuery = async (queryOrCallback, params = [], retryCount = 0) => {
       sqlState: error.sqlState,
       sqlMessage: error.sqlMessage,
       stack: error.stack,
-      service: 'database-service'
+      service: 'database-service',
+      usingFallback
     });
     throw error;
   } finally {
@@ -285,14 +352,16 @@ const executeQuery = async (queryOrCallback, params = [], retryCount = 0) => {
         // Periksa apakah koneksi masih valid dan belum dilepaskan
         if (connection.release && typeof connection.release === 'function') {
           connection.release();
-          if (process.env.DEBUG_DB === 'true') {
-            logger.info(`Connection ${connection.threadId} released`, { service: 'database-service' });
-          }
+          logger.info(`Connection ${connection.threadId} released from ${usingFallback ? 'fallback' : 'primary'} pool`, {
+            service: 'database-service',
+            usingFallback
+          });
         }
       } catch (releaseError) {
         logger.warn('Error releasing connection:', {
           error: releaseError.message,
-          service: 'database-service'
+          service: 'database-service',
+          usingFallback
         });
       }
     }
