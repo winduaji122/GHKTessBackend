@@ -4,34 +4,56 @@ const Redis = require('ioredis');
 const { logger } = require('../utils/logger');
 const { v4: uuidv4 } = require('uuid');
 
+// Deteksi Railway environment
+const isRailway = process.env.RAILWAY_STATIC_URL || process.env.RAILWAY_SERVICE_ID;
+
 // MySQL configuration
 const dbConfig = {
   host: process.env.DB_HOST,
+  port: process.env.DB_PORT || 3306,
   user: process.env.DB_USER,
   password: process.env.DB_PASSWORD,
   database: process.env.DB_NAME,
   waitForConnections: true, // Tunggu koneksi jika tidak tersedia
-  connectionLimit: 2, // Batasi koneksi untuk menghindari max_user_connections
-  idleTimeout: 30000, // 30 detik timeout untuk koneksi idle
-  queueLimit: 20, // Tingkatkan batas antrian untuk menangani lebih banyak permintaan bersamaan
-  enableKeepAlive: true, // Aktifkan keepalive untuk database lokal
+  connectionLimit: isRailway ? 5 : 2, // Tingkatkan batas koneksi untuk Railway
+  idleTimeout: 60000, // 60 detik timeout untuk koneksi idle
+  queueLimit: 0, // Tidak ada batas antrian
+  enableKeepAlive: true, // Aktifkan keepalive
   keepAliveInitialDelay: 10000, // 10 detik delay awal untuk keepalive
   multipleStatements: false, // Nonaktifkan multiple statements untuk keamanan
-  connectTimeout: 15000, // 15 detik timeout koneksi
-  acquireTimeout: 15000, // 15 detik timeout untuk mendapatkan koneksi dari pool
+  connectTimeout: 60000, // 60 detik timeout koneksi
+  acquireTimeout: 60000, // 60 detik timeout untuk mendapatkan koneksi dari pool
+  timeout: 60000, // 60 detik timeout untuk query
   decimalNumbers: true, // Konversi nilai desimal ke JavaScript number
   dateStrings: true, // Kembalikan tanggal sebagai string
-  namedPlaceholders: true // Gunakan placeholder bernama untuk query yang lebih jelas
+  namedPlaceholders: true, // Gunakan placeholder bernama untuk query yang lebih jelas
+  // Tambahkan dukungan untuk caching_sha2_password
+  authPlugins: {
+    mysql_native_password: () => () => Buffer.from([0]),
+    caching_sha2_password: () => () => Buffer.from([0])
+  }
 };
 
 // Tambahkan SSL jika diperlukan
 if (process.env.DB_SSL === 'true') {
   dbConfig.ssl = {
-    // Untuk Clever Cloud, kita perlu menerima sertifikat self-signed
+    // Untuk koneksi eksternal, kita perlu menerima sertifikat self-signed
     rejectUnauthorized: false
   };
   console.log('SSL enabled for database connection with rejectUnauthorized: false');
+} else {
+  console.log('SSL disabled for database connection');
 }
+
+// Log konfigurasi database
+console.log('Database configuration:', {
+  host: process.env.DB_HOST,
+  port: process.env.DB_PORT,
+  user: process.env.DB_USER ? `${process.env.DB_USER.substring(0, 2)}...` : 'Not set',
+  database: process.env.DB_NAME,
+  ssl: process.env.DB_SSL === 'true' ? 'enabled' : 'disabled',
+  railway: isRailway ? 'true' : 'false'
+});
 
 let pool = mysql.createPool(dbConfig);
 
