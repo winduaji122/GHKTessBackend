@@ -697,6 +697,54 @@ app.use((req, res, next) => {
   next();
 });
 
+// Tambahkan route untuk path root
+app.get('/', (req, res) => {
+  res.json({
+    message: 'Welcome to GHK Tess API',
+    version: '1.0.0',
+    documentation: '/api/docs',
+    health: '/api/health',
+    environment: process.env.NODE_ENV,
+    timestamp: new Date().toISOString()
+  });
+});
+
+// Tambahkan route untuk dokumentasi API
+app.get('/api/docs', (req, res) => {
+  res.json({
+    api_version: '1.0.0',
+    base_url: process.env.BASE_URL || `http://localhost:${PORT}`,
+    endpoints: {
+      auth: {
+        login: 'POST /api/auth/login',
+        register: 'POST /api/auth/register',
+        refresh_token: 'GET /api/auth/refresh-token',
+        logout: 'POST /api/auth/logout'
+      },
+      posts: {
+        list: 'GET /api/posts',
+        get_by_id: 'GET /api/posts/:id',
+        create: 'POST /api/posts',
+        update: 'PUT /api/posts/:id',
+        delete: 'DELETE /api/posts/:id',
+        get_by_slug: 'GET /api/posts/public/slug/:slug'
+      },
+      labels: {
+        list: 'GET /api/labels',
+        get_by_id: 'GET /api/labels/:id',
+        create: 'POST /api/labels',
+        update: 'PUT /api/labels/:id',
+        delete: 'DELETE /api/labels/:id'
+      },
+      utility: {
+        health: 'GET /api/health',
+        db_connection: 'GET /api/db-connection',
+        db_test: 'GET /api/db-test'
+      }
+    }
+  });
+});
+
 // Tambahkan endpoint fallback untuk menangani error koneksi database
 app.get('/api/health', (req, res) => {
   res.json({
