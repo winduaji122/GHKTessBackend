@@ -9,12 +9,26 @@ const NODE_ENV = process.env.NODE_ENV || 'development';
 // Cek apakah ini produksi lokal atau produksi online
 let envFile = '.env';
 if (NODE_ENV === 'production') {
-  // Cek apakah file .env.production.local ada
-  const localProdPath = path.join(__dirname, '.env.production.local');
-  if (fs.existsSync(localProdPath)) {
-    envFile = '.env.production.local';
+  // Cek apakah ini Railway environment
+  const isRailway = process.env.RAILWAY_STATIC_URL || process.env.RAILWAY_SERVICE_ID;
+  if (isRailway) {
+    // Cek apakah file .env.railway ada
+    const railwayEnvPath = path.join(__dirname, '.env.railway');
+    if (fs.existsSync(railwayEnvPath)) {
+      envFile = '.env.railway';
+      console.log('Railway environment detected, using .env.railway');
+    } else {
+      envFile = '.env.production';
+      console.log('Railway environment detected, but .env.railway not found, using .env.production');
+    }
   } else {
-    envFile = '.env.production';
+    // Cek apakah file .env.production.local ada
+    const localProdPath = path.join(__dirname, '.env.production.local');
+    if (fs.existsSync(localProdPath)) {
+      envFile = '.env.production.local';
+    } else {
+      envFile = '.env.production';
+    }
   }
 }
 

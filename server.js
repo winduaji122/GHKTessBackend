@@ -57,9 +57,15 @@ const staticPagesRouter = require('./routes/staticPages');
 
 const app = express();
 
-// Enable trust proxy for Vercel environment
+// Enable trust proxy for Vercel/Railway environment
 app.set('trust proxy', 1);
 console.log('Trust proxy enabled for Express');
+
+// Detect Railway environment
+const isRailway = process.env.RAILWAY_STATIC_URL || process.env.RAILWAY_SERVICE_ID;
+if (isRailway) {
+  console.log('Railway environment detected');
+}
 
 // Environment variables
 const isProduction = process.env.NODE_ENV === 'production';
@@ -91,7 +97,9 @@ const corsOptions = {
     const allowedOrigins = [
       process.env.FRONTEND_URL,
       'https://ghk-tess.vercel.app',
-      'http://localhost:5173'
+      'http://localhost:5173',
+      'https://nodejs-production-0c33.up.railway.app',
+      'https://merry-reprieve-production.up.railway.app'
     ];
 
     // Log untuk debugging
