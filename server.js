@@ -124,8 +124,9 @@ const corsOptions = {
       return;
     }
 
-    // Periksa apakah origin ada dalam daftar yang diizinkan
-    if (allowedOrigins.includes(origin)) {
+    // Periksa apakah origin ada dalam daftar yang diizinkan atau berasal dari Netlify
+    if (allowedOrigins.includes(origin) || (origin && origin.includes('netlify'))) {
+      logger.info('CORS allowed for origin:', origin);
       callback(null, true);
     } else {
       logger.warn('Blocked by CORS:', origin);
@@ -709,6 +710,11 @@ app.get('/', (req, res) => {
     environment: process.env.NODE_ENV,
     timestamp: new Date().toISOString()
   });
+});
+
+// Simple ping endpoint for connectivity check
+app.get('/ping', (req, res) => {
+  res.status(200).send('pong');
 });
 
 // Tambahkan route untuk dokumentasi API
