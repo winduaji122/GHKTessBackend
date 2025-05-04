@@ -100,7 +100,8 @@ const corsOptions = {
       'http://localhost:5173',
       'https://nodejs-production-0c33.up.railway.app',
       'https://merry-reprieve-production.up.railway.app',
-      'https://react-frontend-production-c589.up.railway.app'
+      'https://react-frontend-production-c589.up.railway.app',
+      'https://ghk-tess.netlify.app'
     ];
 
     // Log untuk debugging
