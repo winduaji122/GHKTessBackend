@@ -5,15 +5,44 @@ const { logger } = require('../utils/logger');
 const { v4: uuidv4 } = require('uuid');
 
 // Deteksi Railway environment
-const isRailway = process.env.RAILWAY_STATIC_URL || process.env.RAILWAY_SERVICE_ID;
+const isRailway = process.env.RAILWAY_STATIC_URL || process.env.RAILWAY_SERVICE_ID || process.env.RAILWAY_PROJECT_ID;
+
+// Log semua variabel lingkungan terkait database (tanpa menampilkan password lengkap)
+console.log('Environment variables for database connection:');
+console.log('DB_HOST:', process.env.DB_HOST);
+console.log('DB_PORT:', process.env.DB_PORT);
+console.log('DB_USER:', process.env.DB_USER);
+console.log('DB_PASSWORD:', process.env.DB_PASSWORD ? '******' : 'NOT SET');
+console.log('DB_NAME:', process.env.DB_NAME);
+console.log('DB_SSL:', process.env.DB_SSL);
+
+// Jika di Railway, coba gunakan variabel lingkungan MySQL Railway
+if (isRailway) {
+  console.log('Railway environment detected, checking MySQL environment variables');
+  console.log('MYSQLHOST:', process.env.MYSQLHOST);
+  console.log('MYSQLPORT:', process.env.MYSQLPORT);
+  console.log('MYSQLUSER:', process.env.MYSQLUSER);
+  console.log('MYSQLPASSWORD:', process.env.MYSQLPASSWORD ? '******' : 'NOT SET');
+  console.log('MYSQLDATABASE:', process.env.MYSQLDATABASE);
+}
 
 // Fungsi untuk membuat konfigurasi database
 function createDbConfig(host, port, user, password, database, ssl) {
+  // Pastikan password tidak undefined atau null
+  if (!password) {
+    console.error('WARNING: Database password is not set!');
+    // Jika di Railway, coba gunakan MYSQLPASSWORD atau MYSQL_ROOT_PASSWORD
+    if (isRailway) {
+      password = process.env.MYSQLPASSWORD || process.env.MYSQL_ROOT_PASSWORD;
+      console.log('Using Railway MySQL password instead');
+    }
+  }
+
   return {
     host: host,
     port: port || 3306,
     user: user,
-    password: password,
+    password: password, // Pastikan password digunakan
     database: database,
     waitForConnections: true, // Tunggu koneksi jika tidak tersedia
     connectionLimit: isRailway ? 5 : 2, // Tingkatkan batas koneksi untuk Railway
@@ -42,24 +71,40 @@ function createDbConfig(host, port, user, password, database, ssl) {
   };
 }
 
+// Gunakan variabel lingkungan Railway jika tersedia
+const dbHost = isRailway ? (process.env.MYSQLHOST || process.env.DB_HOST) : process.env.DB_HOST;
+const dbPort = isRailway ? (process.env.MYSQLPORT || process.env.DB_PORT) : process.env.DB_PORT;
+const dbUser = isRailway ? (process.env.MYSQLUSER || process.env.DB_USER) : process.env.DB_USER;
+const dbPassword = isRailway ? (process.env.MYSQLPASSWORD || process.env.MYSQL_ROOT_PASSWORD || process.env.DB_PASSWORD) : process.env.DB_PASSWORD;
+const dbName = isRailway ? (process.env.MYSQLDATABASE || process.env.MYSQL_DATABASE || process.env.DB_NAME) : process.env.DB_NAME;
+
 // Konfigurasi utama
 const dbConfig = createDbConfig(
-  process.env.DB_HOST,
-  process.env.DB_PORT,
-  process.env.DB_USER,
-  process.env.DB_PASSWORD,
-  process.env.DB_NAME,
+  dbHost,
+  dbPort,
+  dbUser,
+  dbPassword,
+  dbName,
   process.env.DB_SSL
 );
 
-// Konfigurasi fallback
-const fallbackDbConfig = process.env.DB_FALLBACK_HOST ? createDbConfig(
-  process.env.DB_FALLBACK_HOST,
-  process.env.DB_FALLBACK_PORT,
-  process.env.DB_FALLBACK_USER,
-  process.env.DB_FALLBACK_PASSWORD,
-  process.env.DB_FALLBACK_NAME,
-  process.env.DB_FALLBACK_SSL
+// Log konfigurasi database yang akan digunakan
+console.log('Database configuration to be used:');
+console.log('Host:', dbConfig.host);
+console.log('Port:', dbConfig.port);
+console.log('User:', dbConfig.user);
+console.log('Password:', dbConfig.password ? 'SET' : 'NOT SET');
+console.log('Database:', dbConfig.database);
+console.log('SSL:', dbConfig.ssl ? 'enabled' : 'disabled');
+
+// Konfigurasi fallback - gunakan koneksi TCP Proxy jika tersedia
+const fallbackDbConfig = process.env.RAILWAY_TCP_PROXY_DOMAIN ? createDbConfig(
+  process.env.RAILWAY_TCP_PROXY_DOMAIN,
+  process.env.RAILWAY_TCP_PROXY_PORT,
+  dbUser,
+  dbPassword,
+  dbName,
+  'true' // Selalu gunakan SSL untuk koneksi eksternal
 ) : null;
 
 // Log konfigurasi database
