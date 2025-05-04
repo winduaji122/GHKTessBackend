@@ -101,7 +101,9 @@ const corsOptions = {
       'https://nodejs-production-0c33.up.railway.app',
       'https://merry-reprieve-production.up.railway.app',
       'https://react-frontend-production-c589.up.railway.app',
-      'https://ghk-tess.netlify.app'
+      'https://ghk-tess.netlify.app',
+      'https://majestic-frangipane-c19458.netlify.app',
+      'https://vite-react-liart-seven-67.vercel.app'
     ];
 
     // Log untuk debugging
@@ -118,11 +120,10 @@ const corsOptions = {
       return;
     }
 
-    // Izinkan semua origin di development
-    if (process.env.NODE_ENV !== 'production') {
-      callback(null, true);
-      return;
-    }
+    // Izinkan semua origin di development dan sementara di production untuk debugging
+    // TEMPORARY: Allow all origins in production for debugging
+    callback(null, true);
+    return;
 
     // Periksa apakah origin ada dalam daftar yang diizinkan atau berasal dari Netlify
     if (allowedOrigins.includes(origin) || (origin && origin.includes('netlify'))) {
@@ -714,7 +715,42 @@ app.get('/', (req, res) => {
 
 // Simple ping endpoint for connectivity check
 app.get('/ping', (req, res) => {
+  // Log request details
+  logger.info('Ping request received:', {
+    headers: req.headers,
+    origin: req.headers.origin,
+    method: req.method,
+    path: req.path
+  });
+
+  // Set CORS headers explicitly
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
   res.status(200).send('pong');
+});
+
+// CORS test endpoint
+app.get('/cors-test', (req, res) => {
+  // Log request details
+  logger.info('CORS test request received:', {
+    headers: req.headers,
+    origin: req.headers.origin,
+    method: req.method,
+    path: req.path
+  });
+
+  // Set CORS headers explicitly
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+  res.json({
+    message: 'CORS test successful',
+    headers: req.headers,
+    timestamp: new Date().toISOString()
+  });
 });
 
 // Tambahkan route untuk dokumentasi API
