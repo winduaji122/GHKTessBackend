@@ -152,26 +152,38 @@ if (fallbackDbConfig) {
   });
 }
 
-// Buat pool koneksi utama
-console.log('Creating MySQL connection pool with config:', {
-  host: dbConfig.host,
-  port: dbConfig.port,
-  user: dbConfig.user,
-  password: dbConfig.password ? 'SET' : 'NOT SET',
-  database: dbConfig.database,
-  ssl: dbConfig.ssl ? 'enabled' : 'disabled'
+// CRITICAL FIX: Gunakan koneksi langsung dengan kredensial hardcoded
+// Ini adalah solusi sementara untuk masalah "Access denied for user 'root'@'100.64.0.9' (using password: NO)"
+const RAILWAY_HARDCODED_CONFIG = {
+  host: 'hopper.proxy.rlwy.net',
+  port: 59942,
+  user: 'root',
+  password: 'MOOANaYOrdGrDIRNsFCfjXlsierCZXdX',
+  database: 'mydatabase',
+  ssl: {
+    rejectUnauthorized: false
+  },
+  waitForConnections: true,
+  connectionLimit: 5,
+  queueLimit: 0
+};
+
+// Log konfigurasi yang akan digunakan
+console.log('Using HARDCODED MySQL connection config for Railway:', {
+  host: RAILWAY_HARDCODED_CONFIG.host,
+  port: RAILWAY_HARDCODED_CONFIG.port,
+  user: RAILWAY_HARDCODED_CONFIG.user,
+  password: RAILWAY_HARDCODED_CONFIG.password ? 'SET' : 'NOT SET',
+  database: RAILWAY_HARDCODED_CONFIG.database,
+  ssl: RAILWAY_HARDCODED_CONFIG.ssl ? 'enabled' : 'disabled'
 });
 
-// Pastikan password selalu diatur sebelum membuat pool
-if (!dbConfig.password || dbConfig.password === 'undefined' || dbConfig.password === 'null') {
-  console.error('CRITICAL ERROR: Password is not set before creating pool!');
-  dbConfig.password = 'MOOANaYOrdGrDIRNsFCfjXlsierCZXdX';
-  console.log('Set hardcoded password as last resort');
-}
+// Gunakan konfigurasi hardcoded jika di Railway, atau konfigurasi normal jika tidak
+const finalConfig = isRailway ? RAILWAY_HARDCODED_CONFIG : dbConfig;
 
-let pool = mysql.createPool(dbConfig);
-let fallbackPool = fallbackDbConfig ? mysql.createPool(fallbackDbConfig) : null;
-let usingFallback = false;
+// Buat pool koneksi
+let pool = mysql.createPool(finalConfig);
+let fallbackPool = null; // Tidak perlu fallback karena kita menggunakan kredensial hardcoded
 
 // Tes koneksi pool
 pool.getConnection()
@@ -181,9 +193,7 @@ pool.getConnection()
   })
   .catch(error => {
     console.error('Initial connection test failed:', error.message);
-    if (fallbackPool) {
-      console.log('Will try fallback pool on first query');
-    }
+    console.error('This is a critical error that needs to be fixed!');
   });
 
 pool.on('acquire', function (connection) {
@@ -336,21 +346,69 @@ const executeQuery = async (queryOrCallback, params = [], retryCount = 0) => {
   const MAX_RETRIES = 5;
   const BASE_RETRY_DELAY = 2000; // ms - Tingkatkan dari 1000 menjadi 2000 ms
 
+  // CRITICAL FIX: Jika di Railway, gunakan koneksi langsung dengan kredensial hardcoded
+  if (isRailway && retryCount === 0) {
+    try {
+      logger.info('Using direct connection for Railway', { service: 'database-service' });
+
+      // Buat koneksi langsung
+      const directConnection = await mysql.createConnection({
+        host: 'hopper.proxy.rlwy.net',
+        port: 59942,
+        user: 'root',
+        password: 'MOOANaYOrdGrDIRNsFCfjXlsierCZXdX',
+        database: 'mydatabase',
+        ssl: {
+          rejectUnauthorized: false
+        }
+      });
+
+      try {
+        // Jalankan query
+        if (typeof queryOrCallback === 'function') {
+          const result = await queryOrCallback(directConnection);
+          await directConnection.end();
+          return result;
+        } else {
+          const [result] = await directConnection.query(queryOrCallback, params);
+          await directConnection.end();
+          return result;
+        }
+      } catch (queryError) {
+        logger.error('Error executing query with direct connection:', {
+          error: queryError.message,
+          query: typeof queryOrCallback === 'string' ? queryOrCallback.substring(0, 100) + '...' : 'Function',
+          service: 'database-service'
+        });
+        await directConnection.end();
+        throw queryError;
+      }
+    } catch (directError) {
+      logger.error('Error with direct connection:', {
+        error: directError.message,
+        stack: directError.stack,
+        service: 'database-service'
+      });
+
+      // Jika koneksi langsung gagal, lanjutkan dengan pool koneksi
+      logger.info('Falling back to pool connection', { service: 'database-service' });
+    }
+  }
+
+  // Gunakan pool koneksi jika tidak di Railway atau koneksi langsung gagal
   let connection = null;
   let connectionAcquired = false;
   let result = null;
-  let currentPool = usingFallback && fallbackPool ? fallbackPool : pool;
 
   try {
     // Dapatkan koneksi dari pool
     try {
-      connection = await currentPool.getConnection();
+      connection = await pool.getConnection();
       connectionAcquired = true;
 
       // Log koneksi yang berhasil didapatkan
-      logger.info(`Connection ${connection.threadId} acquired from ${usingFallback ? 'fallback' : 'primary'} pool`, {
-        service: 'database-service',
-        usingFallback
+      logger.info(`Connection ${connection.threadId} acquired from pool`, {
+        service: 'database-service'
       });
 
       // Jika queryOrCallback adalah fungsi, jalankan dengan connection
@@ -361,8 +419,7 @@ const executeQuery = async (queryOrCallback, params = [], retryCount = 0) => {
           logger.error('Error executing function with connection:', {
             error: funcError.message,
             stack: funcError.stack,
-            service: 'database-service',
-            usingFallback
+            service: 'database-service'
           });
           throw funcError;
         }
@@ -375,8 +432,7 @@ const executeQuery = async (queryOrCallback, params = [], retryCount = 0) => {
           logger.error('Error executing query:', {
             error: queryError.message,
             query: typeof queryOrCallback === 'string' ? queryOrCallback.substring(0, 100) + '...' : 'Function',
-            service: 'database-service',
-            usingFallback
+            service: 'database-service'
           });
           throw queryError;
         }
@@ -389,20 +445,8 @@ const executeQuery = async (queryOrCallback, params = [], retryCount = 0) => {
         error: connError.message,
         stack: connError.stack,
         retryCount,
-        service: 'database-service',
-        usingFallback
+        service: 'database-service'
       });
-
-      // Coba gunakan fallback pool jika tersedia dan belum digunakan
-      if (!usingFallback && fallbackPool && (
-        connError.message.includes('Access denied') ||
-        connError.message.includes('ETIMEDOUT') ||
-        connError.message.includes('ECONNREFUSED')
-      )) {
-        logger.info('Switching to fallback database connection', { service: 'database-service' });
-        usingFallback = true;
-        return executeQuery(queryOrCallback, params, 0); // Reset retry count
-      }
 
       // Retry logic for connection errors
       if (retryCount < MAX_RETRIES &&
@@ -410,10 +454,10 @@ const executeQuery = async (queryOrCallback, params = [], retryCount = 0) => {
            connError.message.includes('Connection acquisition timeout') ||
            connError.message.includes('ETIMEDOUT') ||
            connError.message.includes('ECONNREFUSED') ||
-           connError.message.includes('Queue limit reached'))) {
+           connError.message.includes('Queue limit reached') ||
+           connError.message.includes('Access denied'))) {
         logger.info(`Retrying database connection (${retryCount + 1}/${MAX_RETRIES})...`, {
-          service: 'database-service',
-          usingFallback
+          service: 'database-service'
         });
 
         // Gunakan backoff eksponensial dengan jitter untuk mengurangi tekanan pada database
@@ -421,8 +465,7 @@ const executeQuery = async (queryOrCallback, params = [], retryCount = 0) => {
         const delay = (BASE_RETRY_DELAY * Math.pow(2, retryCount)) + jitter;
 
         logger.info(`Waiting ${Math.round(delay / 1000)} seconds before retry...`, {
-          service: 'database-service',
-          usingFallback
+          service: 'database-service'
         });
         await new Promise(resolve => setTimeout(resolve, delay));
 
@@ -440,8 +483,7 @@ const executeQuery = async (queryOrCallback, params = [], retryCount = 0) => {
       sqlState: error.sqlState,
       sqlMessage: error.sqlMessage,
       stack: error.stack,
-      service: 'database-service',
-      usingFallback
+      service: 'database-service'
     });
     throw error;
   } finally {
@@ -451,16 +493,14 @@ const executeQuery = async (queryOrCallback, params = [], retryCount = 0) => {
         // Periksa apakah koneksi masih valid dan belum dilepaskan
         if (connection.release && typeof connection.release === 'function') {
           connection.release();
-          logger.info(`Connection ${connection.threadId} released from ${usingFallback ? 'fallback' : 'primary'} pool`, {
-            service: 'database-service',
-            usingFallback
+          logger.info(`Connection ${connection.threadId} released from pool`, {
+            service: 'database-service'
           });
         }
       } catch (releaseError) {
         logger.warn('Error releasing connection:', {
           error: releaseError.message,
-          service: 'database-service',
-          usingFallback
+          service: 'database-service'
         });
       }
     }
