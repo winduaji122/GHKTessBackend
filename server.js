@@ -99,7 +99,8 @@ const corsOptions = {
       'https://ghk-tess.vercel.app',
       'http://localhost:5173',
       'https://nodejs-production-0c33.up.railway.app',
-      'https://merry-reprieve-production.up.railway.app'
+      'https://merry-reprieve-production.up.railway.app',
+      'https://frontend-production.up.railway.app'
     ];
 
     // Log untuk debugging
