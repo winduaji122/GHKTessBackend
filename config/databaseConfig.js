@@ -28,14 +28,33 @@ if (isRailway) {
 
 // Fungsi untuk membuat konfigurasi database
 function createDbConfig(host, port, user, password, database, ssl) {
+  // Hardcoded password untuk Railway jika variabel lingkungan tidak berfungsi
+  const RAILWAY_PASSWORD = 'MOOANaYOrdGrDIRNsFCfjXlsierCZXdX';
+
   // Pastikan password tidak undefined atau null
   if (!password) {
     console.error('WARNING: Database password is not set!');
-    // Jika di Railway, coba gunakan MYSQLPASSWORD atau MYSQL_ROOT_PASSWORD
+
+    // Jika di Railway, gunakan password hardcoded
     if (isRailway) {
-      password = process.env.MYSQLPASSWORD || process.env.MYSQL_ROOT_PASSWORD;
-      console.log('Using Railway MySQL password instead');
+      console.log('Using hardcoded Railway MySQL password');
+      password = RAILWAY_PASSWORD;
     }
+  } else {
+    console.log('Password is set from environment variables');
+  }
+
+  // Jika di Railway dan host adalah hopper.proxy.rlwy.net, selalu gunakan password hardcoded
+  if (isRailway && host === 'hopper.proxy.rlwy.net') {
+    console.log('Using hardcoded password for hopper.proxy.rlwy.net');
+    password = RAILWAY_PASSWORD;
+  }
+
+  // Log password yang akan digunakan (hanya beberapa karakter pertama)
+  if (password) {
+    console.log(`Password to be used: ${password.substring(0, 3)}...`);
+  } else {
+    console.error('WARNING: Password is still not set after fallbacks!');
   }
 
   return {
@@ -97,12 +116,18 @@ console.log('Password:', dbConfig.password ? 'SET' : 'NOT SET');
 console.log('Database:', dbConfig.database);
 console.log('SSL:', dbConfig.ssl ? 'enabled' : 'disabled');
 
+// Pastikan password selalu diatur untuk Railway
+if (isRailway && (!dbConfig.password || dbConfig.password === 'undefined' || dbConfig.password === 'null')) {
+  console.error('WARNING: Password is still not set in dbConfig! Setting hardcoded password.');
+  dbConfig.password = 'MOOANaYOrdGrDIRNsFCfjXlsierCZXdX';
+}
+
 // Konfigurasi fallback - gunakan koneksi TCP Proxy jika tersedia
 const fallbackDbConfig = process.env.RAILWAY_TCP_PROXY_DOMAIN ? createDbConfig(
   process.env.RAILWAY_TCP_PROXY_DOMAIN,
   process.env.RAILWAY_TCP_PROXY_PORT,
   dbUser,
-  dbPassword,
+  'MOOANaYOrdGrDIRNsFCfjXlsierCZXdX', // Selalu gunakan password hardcoded untuk fallback
   dbName,
   'true' // Selalu gunakan SSL untuk koneksi eksternal
 ) : null;
@@ -128,9 +153,38 @@ if (fallbackDbConfig) {
 }
 
 // Buat pool koneksi utama
+console.log('Creating MySQL connection pool with config:', {
+  host: dbConfig.host,
+  port: dbConfig.port,
+  user: dbConfig.user,
+  password: dbConfig.password ? 'SET' : 'NOT SET',
+  database: dbConfig.database,
+  ssl: dbConfig.ssl ? 'enabled' : 'disabled'
+});
+
+// Pastikan password selalu diatur sebelum membuat pool
+if (!dbConfig.password || dbConfig.password === 'undefined' || dbConfig.password === 'null') {
+  console.error('CRITICAL ERROR: Password is not set before creating pool!');
+  dbConfig.password = 'MOOANaYOrdGrDIRNsFCfjXlsierCZXdX';
+  console.log('Set hardcoded password as last resort');
+}
+
 let pool = mysql.createPool(dbConfig);
 let fallbackPool = fallbackDbConfig ? mysql.createPool(fallbackDbConfig) : null;
 let usingFallback = false;
+
+// Tes koneksi pool
+pool.getConnection()
+  .then(connection => {
+    console.log('Initial connection test successful!');
+    connection.release();
+  })
+  .catch(error => {
+    console.error('Initial connection test failed:', error.message);
+    if (fallbackPool) {
+      console.log('Will try fallback pool on first query');
+    }
+  });
 
 pool.on('acquire', function (connection) {
   logger.info(`Connection ${connection.threadId} acquired`);

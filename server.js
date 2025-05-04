@@ -884,6 +884,59 @@ app.get('/api/db-test', async (req, res) => {
   }
 });
 
+// Add direct database connection test endpoint
+app.get('/api/db-direct-test', async (req, res) => {
+  const mysql = require('mysql2/promise');
+
+  try {
+    console.log('Direct database test endpoint called');
+
+    // Hardcoded credentials for Railway
+    const connectionConfig = {
+      host: 'hopper.proxy.rlwy.net',
+      port: 59942,
+      user: 'root',
+      password: 'MOOANaYOrdGrDIRNsFCfjXlsierCZXdX',
+      database: 'mydatabase',
+      ssl: {
+        rejectUnauthorized: false
+      }
+    };
+
+    console.log('Creating direct connection with config:', {
+      host: connectionConfig.host,
+      port: connectionConfig.port,
+      user: connectionConfig.user,
+      password: connectionConfig.password ? 'SET' : 'NOT SET',
+      database: connectionConfig.database
+    });
+
+    // Create direct connection
+    const connection = await mysql.createConnection(connectionConfig);
+
+    // Execute test query
+    const [rows] = await connection.execute('SELECT 1 as test');
+
+    // Close connection
+    await connection.end();
+
+    res.json({
+      success: true,
+      message: 'Koneksi database langsung berhasil',
+      result: rows,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('Direct database test error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Koneksi database langsung gagal',
+      error: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
 // Fungsi untuk memulai server dengan port cleanup
 const startServer = async () => {
   try {
