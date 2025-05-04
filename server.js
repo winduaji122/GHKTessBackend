@@ -755,6 +755,43 @@ app.get('/api/health', (req, res) => {
   });
 });
 
+// Endpoint untuk mendiagnosis masalah koneksi database
+app.get('/api/db-diagnostics', (req, res) => {
+  // Hanya tampilkan informasi penting tanpa password
+  const diagnostics = {
+    environment: {
+      NODE_ENV: process.env.NODE_ENV,
+      RAILWAY_SERVICE_ID: process.env.RAILWAY_SERVICE_ID ? 'SET' : 'NOT SET',
+      RAILWAY_PROJECT_ID: process.env.RAILWAY_PROJECT_ID ? 'SET' : 'NOT SET',
+      RAILWAY_ENVIRONMENT_ID: process.env.RAILWAY_ENVIRONMENT_ID ? 'SET' : 'NOT SET'
+    },
+    database: {
+      DB_HOST: process.env.DB_HOST,
+      DB_PORT: process.env.DB_PORT,
+      DB_USER: process.env.DB_USER,
+      DB_PASSWORD: process.env.DB_PASSWORD ? 'SET' : 'NOT SET',
+      DB_NAME: process.env.DB_NAME,
+      DB_SSL: process.env.DB_SSL
+    },
+    railway_mysql: {
+      MYSQLHOST: process.env.MYSQLHOST,
+      MYSQLPORT: process.env.MYSQLPORT,
+      MYSQLUSER: process.env.MYSQLUSER,
+      MYSQLPASSWORD: process.env.MYSQLPASSWORD ? 'SET' : 'NOT SET',
+      MYSQLDATABASE: process.env.MYSQLDATABASE,
+      MYSQL_ROOT_PASSWORD: process.env.MYSQL_ROOT_PASSWORD ? 'SET' : 'NOT SET',
+      MYSQL_DATABASE: process.env.MYSQL_DATABASE
+    },
+    railway_tcp_proxy: {
+      RAILWAY_TCP_PROXY_DOMAIN: process.env.RAILWAY_TCP_PROXY_DOMAIN,
+      RAILWAY_TCP_PROXY_PORT: process.env.RAILWAY_TCP_PROXY_PORT,
+      RAILWAY_TCP_APPLICATION_PORT: process.env.RAILWAY_TCP_APPLICATION_PORT
+    }
+  };
+
+  res.json(diagnostics);
+});
+
 // Tambahkan endpoint fallback untuk data posts jika database tidak tersedia
 app.get('/api/posts/fallback', (req, res) => {
   res.json({
