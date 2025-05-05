@@ -110,6 +110,9 @@ const corsOptions = {
       'https://vite-react-liart.vercel.app'
     ];
 
+  // Tambahkan logging untuk debugging CORS
+  console.log('CORS Request from origin:', origin);
+
     // Log untuk debugging
     logger.info('CORS Request:', {
       service: 'user-service',
@@ -167,7 +170,13 @@ const corsOptions = {
   optionsSuccessStatus: 204
 };
 
-app.use(cors(corsOptions));
+// Konfigurasi CORS yang lebih permisif untuk debugging
+app.use(cors({
+  ...corsOptions,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  credentials: true,
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'X-CSRF-Token', 'X-Client-ID', 'X-User-Identity']
+}));
 app.options('*', cors(corsOptions));
 
 // Security middleware
@@ -400,6 +409,14 @@ app.get('/api/check-file/:filename', (req, res) => {
 // Tambahkan middleware untuk menangani permintaan ke /auth/refresh-token
 app.get('/auth/refresh-token', (req, res) => {
   logger.info('Redirecting from /auth/refresh-token to /api/auth/refresh-token');
+  // Redirect ke endpoint yang benar
+  req.url = '/api/auth/refresh-token';
+  app.handle(req, res);
+});
+
+// Tambahkan middleware untuk menangani permintaan POST ke /auth/refresh-token
+app.post('/auth/refresh-token', (req, res) => {
+  logger.info('Redirecting from POST /auth/refresh-token to /api/auth/refresh-token');
   // Redirect ke endpoint yang benar
   req.url = '/api/auth/refresh-token';
   app.handle(req, res);

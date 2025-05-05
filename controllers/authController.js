@@ -941,13 +941,19 @@ exports.refreshToken = async (req, res) => {
     console.log('Body:', req.body);
     console.log('Origin:', req.headers.origin);
 
-    // Ambil refresh token dari cookie atau body request (untuk Vercel)
+    // Ambil refresh token dari cookie, body request, atau query parameter (untuk Vercel)
     let refreshToken = req.cookies.refreshToken;
 
     // Jika tidak ada di cookie, cek di body request (untuk Vercel deployment)
     if (!refreshToken && req.body && req.body.refreshToken) {
       console.log('Using refresh token from request body (Vercel deployment)');
       refreshToken = req.body.refreshToken;
+    }
+
+    // Jika masih tidak ada, cek di query parameter (untuk fallback Vercel)
+    if (!refreshToken && req.query && req.query.refreshToken) {
+      console.log('Using refresh token from query parameter (Vercel fallback)');
+      refreshToken = req.query.refreshToken;
     }
 
     if (!refreshToken) {
