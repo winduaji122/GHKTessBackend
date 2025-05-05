@@ -659,13 +659,16 @@ exports.googleCallback = async (req, res) => {
       new Date(Date.now() + TOKEN_CONFIG.REFRESH.expiresIn * 1000)
     );
 
-    // Set cookie
-    res.cookie('refreshToken', refreshToken, COOKIE_CONFIG);
+    // Set cookie for non-Vercel environments
+    if (!req.headers.origin || !req.headers.origin.includes('vercel.app')) {
+      res.cookie('refreshToken', refreshToken, COOKIE_CONFIG);
+    }
 
-    // Send response
+    // Send response with refreshToken for Vercel environments
     res.status(200).json({
       success: true,
       accessToken,
+      refreshToken: req.headers.origin && req.headers.origin.includes('vercel.app') ? refreshToken : undefined,
       user: {
         id: user.id,
         name: user.name,
@@ -778,13 +781,16 @@ exports.googleLogin = async (req, res) => {
       new Date(Date.now() + TOKEN_CONFIG.REFRESH.expiresIn * 1000)
     );
 
-    // Set cookie
-    res.cookie('refreshToken', refreshToken, COOKIE_CONFIG);
+    // Set cookie for non-Vercel environments
+    if (!req.headers.origin || !req.headers.origin.includes('vercel.app')) {
+      res.cookie('refreshToken', refreshToken, COOKIE_CONFIG);
+    }
 
-    // Kirim response
+    // Kirim response with refreshToken for Vercel environments
     res.status(200).json({
       success: true,
       accessToken,
+      refreshToken: req.headers.origin && req.headers.origin.includes('vercel.app') ? refreshToken : undefined,
       user: {
         id: user.id,
         name: user.name,
@@ -932,12 +938,20 @@ exports.refreshToken = async (req, res) => {
     console.log('IP:', req.ip);
     console.log('User Agent:', req.headers['user-agent']);
     console.log('Cookies:', req.cookies);
+    console.log('Body:', req.body);
+    console.log('Origin:', req.headers.origin);
 
-    // Ambil refresh token dari cookie
-    const refreshToken = req.cookies.refreshToken;
+    // Ambil refresh token dari cookie atau body request (untuk Vercel)
+    let refreshToken = req.cookies.refreshToken;
+
+    // Jika tidak ada di cookie, cek di body request (untuk Vercel deployment)
+    if (!refreshToken && req.body && req.body.refreshToken) {
+      console.log('Using refresh token from request body (Vercel deployment)');
+      refreshToken = req.body.refreshToken;
+    }
 
     if (!refreshToken) {
-      console.log('Refresh token tidak ditemukan dalam cookie');
+      console.log('Refresh token tidak ditemukan dalam cookie atau body request');
       return res.status(401).json({
         success: false,
         message: 'Refresh token tidak ditemukan'
@@ -1068,9 +1082,14 @@ exports.refreshToken = async (req, res) => {
     console.log('New Access Token:', accessToken.substring(0, 15) + '...');
     console.log('New Refresh Token:', newRefreshToken.substring(0, 10) + '...');
 
+    // Cek apakah request berasal dari Vercel
+    const isVercelRequest = req.headers.origin && req.headers.origin.includes('vercel.app');
+
+    // Jika request dari Vercel, sertakan refreshToken dalam respons JSON
     return res.status(200).json({
       success: true,
       accessToken,
+      refreshToken: isVercelRequest ? newRefreshToken : undefined,
       user: {
         id: user.id,
         username: user.username,

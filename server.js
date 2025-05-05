@@ -103,7 +103,11 @@ const corsOptions = {
       'https://react-frontend-production-c589.up.railway.app',
       'https://ghk-tess.netlify.app',
       'https://majestic-frangipane-c19458.netlify.app',
-      'https://vite-react-liart-seven-67.vercel.app'
+      'https://vite-react-liart-seven-67.vercel.app',
+      // Tambahkan semua domain Vercel yang mungkin
+      'https://vite-react-liart-seven.vercel.app',
+      'https://vite-react-liart-seven-67.vercel.app',
+      'https://vite-react-liart.vercel.app'
     ];
 
     // Log untuk debugging
@@ -173,17 +177,18 @@ app.use(helmet({
       defaultSrc: ["'self'"],
       scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'"],
       styleSrc: ["'self'", "'unsafe-inline'"],
-      imgSrc: ["'self'", "data:", "blob:", "http://localhost:5000", process.env.FRONTEND_URL],
+      imgSrc: ["'self'", "data:", "blob:", "http://localhost:5000", process.env.FRONTEND_URL, "*.vercel.app"],
       connectSrc: ["'self'",
         "http://localhost:5000",  // Tambahkan backend URL
         process.env.FRONTEND_URL,
-        "ws://localhost:*"  // Untuk WebSocket jika digunakan
+        "ws://localhost:*",  // Untuk WebSocket jika digunakan
+        "*.vercel.app"  // Untuk deployment Vercel
       ],
-      frameSrc: ["'self'", process.env.FRONTEND_URL]
+      frameSrc: ["'self'", process.env.FRONTEND_URL, "*.vercel.app", "accounts.google.com"]
     },
   },
   crossOriginEmbedderPolicy: false,
-  crossOriginOpenerPolicy: { policy: "same-origin-allow-popups" }
+  crossOriginOpenerPolicy: { policy: "unsafe-none" }  // Ubah ke unsafe-none untuk mengatasi masalah postMessage
 }));
 
 app.use(helmet.crossOriginResourcePolicy({ policy: "cross-origin" }));
