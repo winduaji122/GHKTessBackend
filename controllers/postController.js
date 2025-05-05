@@ -250,37 +250,53 @@ exports.getPostById = async (req, res) => {
     try {
       // Gunakan executeQuery untuk menjalankan query dengan koneksi yang dikelola dengan baik
       const result = await db.executeQuery(async (connection) => {
-        // Query untuk mendapatkan post dan informasi dasar
-        const [rows] = await connection.query(`
-          SELECT
-            p.*,
-            u.name as author_name,
-            u.email as author_email
-          FROM posts p
-          LEFT JOIN users u ON p.author_id = u.id
-          WHERE p.id = ?
-        `, [id]);
+        // Jalankan query secara paralel untuk meningkatkan performa
+        const [postQuery, statsQuery, labelsQuery] = await Promise.all([
+          // Query untuk mendapatkan post dan informasi dasar
+          connection.query(`
+            SELECT
+              p.*,
+              u.name as author_name,
+              u.email as author_email
+            FROM posts p
+            LEFT JOIN users u ON p.author_id = u.id
+            WHERE p.id = ?
+          `, [id]),
 
-        const post = rows[0];
+          // Query untuk mendapatkan statistik post (views, likes, comments)
+          connection.query(`
+            SELECT
+              COUNT(DISTINCT l.id) as like_count,
+              COUNT(DISTINCT c.id) as comment_count
+            FROM posts p
+            LEFT JOIN likes l ON p.id = l.post_id
+            LEFT JOIN comments c ON p.id = c.post_id
+            WHERE p.id = ?
+          `, [id]),
+
+          // Query untuk mendapatkan label dengan informasi parent
+          connection.query(`
+            SELECT
+              ul.id,
+              ul.label,
+              ul.parent_id,
+              parent.label as parent_label
+            FROM post_labels pl
+            JOIN unique_labels ul ON pl.label_id = ul.id
+            LEFT JOIN unique_labels parent ON ul.parent_id = parent.id
+            WHERE pl.post_id = ?
+          `, [id])
+        ]);
+
+        const post = postQuery[0][0];
+        const stats = statsQuery[0][0];
+        const labelRows = labelsQuery[0];
 
         if (!post) {
           return null;
         }
 
-        // Query terpisah untuk mendapatkan label dengan informasi parent
-        const [labelRows] = await connection.query(`
-          SELECT
-            ul.id,
-            ul.label,
-            ul.parent_id,
-            parent.label as parent_label
-          FROM post_labels pl
-          JOIN unique_labels ul ON pl.label_id = ul.id
-          LEFT JOIN unique_labels parent ON ul.parent_id = parent.id
-          WHERE pl.post_id = ?
-        `, [post.id]);
-
-        // Format response dengan data yang diambil secara terpisah
+        // Format response dengan data yang diambil secara paralel
         return {
           ...post,
           image: post.image ? formatImageUrl(post.image) : null,
@@ -288,6 +304,8 @@ exports.getPostById = async (req, res) => {
           labels: labelRows || [],
           is_featured: Boolean(post.is_featured),
           is_spotlight: Boolean(post.is_spotlight),
+          like_count: stats?.like_count || 0,
+          comment_count: stats?.comment_count || 0,
           author: {
             name: post.author_name,
             email: post.author_email

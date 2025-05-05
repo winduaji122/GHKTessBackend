@@ -260,12 +260,22 @@ app.use((req, res, next) => {
     res.header('Access-Control-Max-Age', '86400'); // 24 jam
     res.sendStatus(204);
   } else {
-    logger.info('CORS Request:', {
-      origin: req.headers.origin,
-      method: req.method,
-      path: req.path,
-      cookies: req.cookies ? 'Present' : 'Not present'
-    });
+    // Hanya log CORS request di development atau jika DEBUG_CORS=true
+    if (process.env.NODE_ENV !== 'production' || process.env.DEBUG_CORS === 'true') {
+      // Skip logging untuk static files dan health checks
+      if (!req.path.startsWith('/uploads/') &&
+          !req.path.startsWith('/storage/') &&
+          req.path !== '/api/health' &&
+          req.path !== '/ping' &&
+          req.path !== '/cors-test') {
+        logger.info('CORS Request:', {
+          origin: req.headers.origin,
+          method: req.method,
+          path: req.path,
+          cookies: req.cookies ? 'Present' : 'Not present'
+        });
+      }
+    }
     next();
   }
 });
@@ -407,9 +417,21 @@ app.use('/uploads', (req, res, next) => {
   next();
 });
 
-// Logging middleware
+// Logging middleware - hanya log di development atau jika DEBUG=true
 app.use((req, res, next) => {
-  logger.info(`${req.method} ${req.path}`);
+  // Skip logging untuk static files dan health checks
+  if (req.path.startsWith('/uploads/') ||
+      req.path.startsWith('/storage/') ||
+      req.path === '/api/health' ||
+      req.path === '/ping' ||
+      req.path === '/cors-test') {
+    return next();
+  }
+
+  // Hanya log di development atau jika DEBUG=true
+  if (process.env.NODE_ENV !== 'production' || process.env.DEBUG === 'true') {
+    logger.info(`${req.method} ${req.path}`);
+  }
   next();
 });
 

@@ -8,6 +8,75 @@ const CACHE_DURATION = {
   long: 60 * 60 * 2     // 2 jam
 };
 
+// In-memory cache sebagai fallback jika Redis tidak tersedia
+const memoryCache = new Map();
+
+// Fungsi untuk mendapatkan data dari cache (Redis atau memory)
+const getFromCache = async (key) => {
+  try {
+    // Coba ambil dari Redis terlebih dahulu
+    if (redis) {
+      const data = await redis.get(key);
+      if (data) {
+        return JSON.parse(data);
+      }
+    }
+
+    // Fallback ke memory cache jika Redis tidak tersedia atau data tidak ditemukan
+    if (memoryCache.has(key)) {
+      const item = memoryCache.get(key);
+      // Periksa apakah cache sudah expired
+      if (item.expires > Date.now()) {
+        return item.data;
+      } else {
+        // Hapus cache yang sudah expired
+        memoryCache.delete(key);
+      }
+    }
+
+    return null;
+  } catch (error) {
+    logger.error('Error getting from cache:', {
+      error: error.message,
+      key,
+      service: 'cache-service'
+    });
+    return null;
+  }
+};
+
+// Fungsi untuk menyimpan data ke cache (Redis atau memory)
+const setToCache = async (key, data, duration) => {
+  try {
+    // Coba simpan ke Redis terlebih dahulu
+    if (redis) {
+      await redis.setex(key, duration, JSON.stringify(data));
+    }
+
+    // Simpan juga ke memory cache sebagai fallback
+    memoryCache.set(key, {
+      data,
+      expires: Date.now() + (duration * 1000)
+    });
+
+    return true;
+  } catch (error) {
+    logger.error('Error setting to cache:', {
+      error: error.message,
+      key,
+      service: 'cache-service'
+    });
+
+    // Jika Redis gagal, tetap simpan ke memory cache
+    memoryCache.set(key, {
+      data,
+      expires: Date.now() + (duration * 1000)
+    });
+
+    return false;
+  }
+};
+
 const cacheMiddleware = (duration = CACHE_DURATION.medium, key) => {
   return async (req, res, next) => {
     // Selalu aktifkan caching di production
@@ -18,26 +87,41 @@ const cacheMiddleware = (duration = CACHE_DURATION.medium, key) => {
     // Gunakan URL sebagai cache key jika tidak ada key yang diberikan
     const cacheKey = key || req.originalUrl;
 
+    // Tambahkan query params ke cache key jika ada
+    const fullCacheKey = Object.keys(req.query).length > 0
+      ? `${cacheKey}?${new URLSearchParams(req.query).toString()}`
+      : cacheKey;
+
     try {
       // Coba ambil data dari cache
-      const cachedData = await redis.get(cacheKey);
+      const cachedData = await getFromCache(fullCacheKey);
 
       if (cachedData) {
-        logger.info(`Cache hit for: ${cacheKey}`, { service: 'cache-service' });
-        return res.json(JSON.parse(cachedData));
+        // Hanya log di level debug untuk mengurangi log berlebihan
+        if (process.env.DEBUG_CACHE === 'true') {
+          logger.info(`Cache hit for: ${fullCacheKey}`, { service: 'cache-service' });
+        }
+        return res.json(cachedData);
       }
 
-      logger.info(`Cache miss for: ${cacheKey}`, { service: 'cache-service' });
+      // Hanya log di level debug untuk mengurangi log berlebihan
+      if (process.env.DEBUG_CACHE === 'true') {
+        logger.info(`Cache miss for: ${fullCacheKey}`, { service: 'cache-service' });
+      }
 
       // Override res.json untuk menyimpan response ke cache
       const originalJson = res.json;
       res.json = function(data) {
         // Hanya cache response yang sukses
         if (this.statusCode >= 200 && this.statusCode < 300 && data) {
-          redis.setex(cacheKey, duration, JSON.stringify(data))
-            .catch(err => logger.error('Error setting cache:', { error: err.message, key: cacheKey, service: 'cache-service' }));
-
-          logger.info(`Cache set for: ${cacheKey}, expires in ${duration}s`, { service: 'cache-service' });
+          setToCache(fullCacheKey, data, duration)
+            .then(success => {
+              if (process.env.DEBUG_CACHE === 'true' && success) {
+                logger.info(`Cache set for: ${fullCacheKey}, expires in ${duration}s`, {
+                  service: 'cache-service'
+                });
+              }
+            });
         }
 
         originalJson.call(this, data);
@@ -45,7 +129,12 @@ const cacheMiddleware = (duration = CACHE_DURATION.medium, key) => {
 
       next();
     } catch (error) {
-      logger.error('Cache error:', { error: error.message, stack: error.stack, key: cacheKey, service: 'cache-service' });
+      logger.error('Cache error:', {
+        error: error.message,
+        stack: error.stack,
+        key: fullCacheKey,
+        service: 'cache-service'
+      });
       next();
     }
   };

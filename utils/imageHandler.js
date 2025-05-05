@@ -32,40 +32,80 @@ const optimizeAndSaveImage = async (file) => {
     const optimizedFileName = `optimized-${Date.now()}-${file.originalname}`;
     const outputPath = path.join(uploadDir, optimizedFileName);
 
-    logger.info('Starting image optimization', {
-      originalName: file.originalname,
-      outputPath: optimizedFileName,
-      size: file.size
-    });
-
-    await sharp(file.path)
-      .resize(800)
-      .jpeg({ quality: 80 })
-      .toFile(outputPath);
-
-    await new Promise(resolve => setTimeout(resolve, 1000));
-
-    try {
-      await fs.unlink(file.path);
-    } catch (unlinkError) {
-      logger.warn('Failed to delete original file', {
-        error: unlinkError.message,
-        file: file.path
+    // Hanya log di development mode
+    if (process.env.NODE_ENV !== 'production') {
+      logger.info('Starting image optimization', {
+        originalName: file.originalname,
+        outputPath: optimizedFileName,
+        size: file.size
       });
     }
 
-    logger.info('Image optimization completed', {
-      filename: optimizedFileName
+    // Deteksi tipe gambar untuk optimasi yang lebih baik
+    let imageProcessor = sharp(file.path);
+
+    // Resize gambar dengan mempertahankan aspek ratio
+    imageProcessor = imageProcessor.resize({
+      width: 800,
+      height: 800,
+      fit: 'inside',
+      withoutEnlargement: true
     });
+
+    // Optimasi berdasarkan tipe file
+    const fileExt = path.extname(file.originalname).toLowerCase();
+
+    if (fileExt === '.png') {
+      // Optimasi untuk PNG
+      imageProcessor = imageProcessor.png({
+        compressionLevel: 8,
+        adaptiveFiltering: true,
+        palette: true
+      });
+    } else if (fileExt === '.gif') {
+      // Konversi GIF ke PNG untuk ukuran lebih kecil
+      imageProcessor = imageProcessor.png({
+        compressionLevel: 8
+      });
+    } else {
+      // Default ke JPEG untuk format lain
+      imageProcessor = imageProcessor.jpeg({
+        quality: 80,
+        progressive: true
+      });
+    }
+
+    // Proses dan simpan gambar
+    await imageProcessor.toFile(outputPath);
+
+    // Hapus file asli setelah optimasi
+    try {
+      await fs.unlink(file.path);
+    } catch (unlinkError) {
+      // Hanya log di development mode
+      if (process.env.NODE_ENV !== 'production') {
+        logger.warn('Failed to delete original file', {
+          error: unlinkError.message,
+          file: file.path
+        });
+      }
+    }
+
+    // Hanya log di development mode
+    if (process.env.NODE_ENV !== 'production') {
+      logger.info('Image optimization completed', {
+        filename: optimizedFileName
+      });
+    }
 
     return optimizedFileName;
   } catch (error) {
     logger.error('Image optimization failed', {
       error: error.message,
-      stack: error.stack,
       file: file?.originalname
     });
 
+    // Jika optimasi gagal, gunakan file asli
     return file?.filename || null;
   }
 };

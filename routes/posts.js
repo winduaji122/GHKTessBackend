@@ -95,10 +95,11 @@ const validatePost = [
 ];
 
 // 1. PUBLIC ROUTES (No Auth Required)
-router.get('/', cacheMiddleware(300), postController.getAllPosts);
-router.get('/featured', cacheMiddleware(300), postController.getFeaturedPosts);
-router.get('/spotlight', cacheMiddleware(300, 'spotlight-posts'), postController.getSpotlightPosts);
-router.get('/popular', cacheMiddleware(300, 'popular-posts'), postController.getPopularPosts);
+// Tingkatkan durasi cache untuk endpoint yang sering diakses
+router.get('/', cacheMiddleware(600), postController.getAllPosts); // 10 menit
+router.get('/featured', cacheMiddleware(1800), postController.getFeaturedPosts); // 30 menit
+router.get('/spotlight', cacheMiddleware(1800, 'spotlight-posts'), postController.getSpotlightPosts); // 30 menit
+router.get('/popular', cacheMiddleware(1800, 'popular-posts'), postController.getPopularPosts); // 30 menit
 
 // 2. PUBLIC ROUTES dengan parameter
 router.get('/public/related/:id', postController.getRelatedPosts);

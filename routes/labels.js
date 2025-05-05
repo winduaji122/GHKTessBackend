@@ -4,9 +4,10 @@ const labelController = require('../controllers/labelController');
 const { isAdmin, isAuthenticated } = require('../middleware/authMiddleware');
 const { logger } = require('../utils/logger');
 const { getAllLabels, addLabelToPost, removeLabelFromPost } = require('../config/databaseConfig');
+const { cacheMiddleware } = require('../middleware/cacheMiddleware');
 
 // Mendapatkan semua label
-router.get('/', async (req, res) => {
+router.get('/', cacheMiddleware(1800, 'all-labels'), async (req, res) => { // Cache selama 30 menit
   try {
     const labels = await getAllLabels();
     res.json(labels);
@@ -17,7 +18,7 @@ router.get('/', async (req, res) => {
 });
 
 // Mendapatkan label dengan struktur sublabel
-router.get('/with-sublabels', async (req, res) => {
+router.get('/with-sublabels', cacheMiddleware(1800, 'labels-with-sublabels'), async (req, res) => { // Cache selama 30 menit
   try {
     await labelController.getLabelsWithSublabels(req, res);
   } catch (error) {

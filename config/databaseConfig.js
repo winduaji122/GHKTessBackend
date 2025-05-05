@@ -50,6 +50,12 @@ function createDbConfig(host, port, user, password, database, ssl) {
     password = RAILWAY_PASSWORD;
   }
 
+  // Jika di produksi lokal dan user adalah root, pastikan menggunakan password yang benar
+  if (!isRailway && process.env.NODE_ENV === 'production' && user === 'root' && host === '127.0.0.1') {
+    console.log('Using root user for local production environment');
+    // Pastikan password sudah benar dari .env.production.local
+  }
+
   // Log password yang akan digunakan (hanya beberapa karakter pertama)
   if (password) {
     console.log(`Password to be used: ${password.substring(0, 3)}...`);
@@ -71,18 +77,18 @@ function createDbConfig(host, port, user, password, database, ssl) {
     keepAliveInitialDelay: 10000, // 10 detik delay awal untuk keepalive
     multipleStatements: false, // Nonaktifkan multiple statements untuk keamanan
     connectTimeout: 60000, // 60 detik timeout koneksi
-    acquireTimeout: 60000, // 60 detik timeout untuk mendapatkan koneksi dari pool
-    timeout: 60000, // 60 detik timeout untuk query
+    // Hapus opsi yang tidak valid untuk mysql2
+    // acquireTimeout: 60000, // 60 detik timeout untuk mendapatkan koneksi dari pool
+    // timeout: 60000, // 60 detik timeout untuk query
     decimalNumbers: true, // Konversi nilai desimal ke JavaScript number
     dateStrings: true, // Kembalikan tanggal sebagai string
     namedPlaceholders: true, // Gunakan placeholder bernama untuk query yang lebih jelas
-    // Tambahkan dukungan untuk caching_sha2_password
+    // Konfigurasi autentikasi yang lebih sederhana
     authPlugins: {
-      mysql_native_password: () => () => Buffer.from([0]),
-      caching_sha2_password: () => () => Buffer.from([0])
+      mysql_native_password: () => () => Buffer.from([0])
     },
-    // Tambahkan SSL jika diperlukan
-    ...(ssl === 'true' ? {
+    // Konfigurasi SSL berdasarkan lingkungan
+    ...(ssl === 'true' || (!isRailway && process.env.NODE_ENV === 'production') ? {
       ssl: {
         rejectUnauthorized: false
       }
@@ -191,9 +197,43 @@ pool.getConnection()
     console.log('Initial connection test successful!');
     connection.release();
   })
-  .catch(error => {
+  .catch(async error => {
     console.error('Initial connection test failed:', error.message);
     console.error('This is a critical error that needs to be fixed!');
+
+    // Jika koneksi gagal dan bukan di Railway, coba dengan user root
+    if (!isRailway && error.message.includes('Bad handshake')) {
+      console.log('Attempting to connect with root user as fallback...');
+
+      try {
+        // Buat konfigurasi dengan user root
+        const rootConfig = {
+          host: process.env.DB_HOST,
+          port: process.env.DB_PORT,
+          user: 'root',
+          password: 'Winduaji122#',
+          database: process.env.DB_NAME,
+          ssl: {
+            rejectUnauthorized: false
+          },
+          connectTimeout: 60000,
+          authPlugins: {
+            mysql_native_password: () => () => Buffer.from([0])
+          }
+        };
+
+        // Buat pool baru dengan user root
+        console.log('Creating new connection pool with root user...');
+        pool = mysql.createPool(rootConfig);
+
+        // Tes koneksi dengan pool baru
+        const rootConnection = await pool.getConnection();
+        console.log('Connection with root user successful!');
+        rootConnection.release();
+      } catch (rootError) {
+        console.error('Root user connection also failed:', rootError.message);
+      }
+    }
   });
 
 pool.on('acquire', function (connection) {
@@ -351,7 +391,7 @@ const executeQuery = async (queryOrCallback, params = [], retryCount = 0) => {
     try {
       logger.info('Using direct connection for Railway', { service: 'database-service' });
 
-      // Buat koneksi langsung
+      // Buat koneksi langsung dengan konfigurasi yang lebih sederhana
       const directConnection = await mysql.createConnection({
         host: 'hopper.proxy.rlwy.net',
         port: 59942,
@@ -360,6 +400,11 @@ const executeQuery = async (queryOrCallback, params = [], retryCount = 0) => {
         database: 'mydatabase',
         ssl: {
           rejectUnauthorized: false
+        },
+        // Konfigurasi tambahan untuk mengatasi masalah handshake
+        connectTimeout: 60000,
+        authPlugins: {
+          mysql_native_password: () => () => Buffer.from([0])
         }
       });
 

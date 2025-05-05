@@ -481,73 +481,51 @@ class Post {
         }
 
         // Tambahkan filter label jika ada
-        let joinLabel = '';
         if (labelId) {
-          joinLabel = 'LEFT JOIN post_labels pl ON p.id = pl.post_id';
           whereConditions.push('pl.label_id = ?');
           queryParams.push(labelId);
         }
 
-        // Query dasar untuk mengambil post
+        // Query dasar untuk mengambil post dengan GROUP_CONCAT untuk labels
         let query = `
-          SELECT DISTINCT p.*, u.name as author_name
+          SELECT DISTINCT
+            p.*,
+            u.name as author_name,
+            GROUP_CONCAT(
+              DISTINCT JSON_OBJECT(
+                'id', ul.id,
+                'label', ul.label
+              )
+            ) as labels_json
           FROM posts p
-          ${joinLabel}
           LEFT JOIN users u ON p.author_id = u.id
+          LEFT JOIN post_labels pl ON p.id = pl.post_id
+          LEFT JOIN unique_labels ul ON pl.label_id = ul.id
           WHERE ${whereConditions.join(' AND ')}
+          GROUP BY p.id, u.name
           ORDER BY p.created_at DESC
           LIMIT ? OFFSET ?
         `;
 
         // Tambahkan parameter untuk LIMIT dan OFFSET
-        queryParams.push(limit, offset);
+        queryParams.push(parseInt(limit), offset);
 
         // Eksekusi query untuk mendapatkan post
         const [posts] = await connection.query(query, queryParams);
 
-        // Jika includeLabels=true, ambil label untuk setiap post
-        if (includeLabels && posts.length > 0) {
-          // Ambil semua ID post
-          const postIds = posts.map(post => post.id);
-
-          // Query untuk mengambil label untuk semua post sekaligus
-          const labelsQuery = `
-            SELECT pl.post_id, ul.id as label_id, ul.label
-            FROM post_labels pl
-            JOIN unique_labels ul ON pl.label_id = ul.id
-            WHERE pl.post_id IN (?)
-          `;
-
-          const [labelsResults] = await connection.query(labelsQuery, [postIds]);
-
-          // Kelompokkan label berdasarkan post_id
-          const labelsMap = {};
-          labelsResults.forEach(row => {
-            if (!labelsMap[row.post_id]) {
-              labelsMap[row.post_id] = [];
-            }
-            labelsMap[row.post_id].push({
-              id: row.label_id,
-              label: row.label
-            });
-          });
-
-          // Tambahkan label ke setiap post
-          posts.forEach(post => {
-            post.labels = labelsMap[post.id] || [];
-          });
-        } else {
-          // Jika tidak perlu label, tetap berikan array kosong
-          posts.forEach(post => {
-            post.labels = [];
-          });
-        }
+        // Parse labels JSON
+        const formattedPosts = posts.map(post => ({
+          ...post,
+          labels: post.labels_json
+            ? JSON.parse(`[${post.labels_json}]`).filter(label => label !== null)
+            : []
+        }));
 
         // Hitung total post untuk pagination dengan filter yang sama
         const countQuery = `
           SELECT COUNT(DISTINCT p.id) as total
           FROM posts p
-          ${joinLabel}
+          LEFT JOIN post_labels pl ON p.id = pl.post_id
           WHERE ${whereConditions.join(' AND ')}
         `;
 
@@ -560,7 +538,7 @@ class Post {
         const total = countResult[0].total;
 
         return {
-          posts,
+          posts: formattedPosts,
           totalPages: Math.ceil(total / limit),
           totalCount: total
         };
@@ -581,27 +559,40 @@ class Post {
   static async getPostsWithDetails(limit = 20, page = 1, includeLabels = true, sortBy = 'created_at', sortOrder = 'desc') {
     return executeQuery(async (connection) => {
       const offset = (page - 1) * limit;
+
+      // Perbaikan: Gunakan GROUP_CONCAT dengan JSON_OBJECT untuk menghindari N+1 query
       const query = `
-        SELECT p.*, u.name as author_name,
-               COUNT(DISTINCT l.id) as like_count,
-               COUNT(DISTINCT c.id) as comment_count
+        SELECT
+          p.*,
+          u.name as author_name,
+          COUNT(DISTINCT l.id) as like_count,
+          COUNT(DISTINCT c.id) as comment_count,
+          GROUP_CONCAT(
+            DISTINCT JSON_OBJECT(
+              'id', ul.id,
+              'label', ul.label
+            )
+          ) as labels_json
         FROM posts p
         LEFT JOIN users u ON p.author_id = u.id
         LEFT JOIN likes l ON p.id = l.post_id
         LEFT JOIN comments c ON p.id = c.post_id
+        LEFT JOIN post_labels pl ON p.id = pl.post_id
+        LEFT JOIN unique_labels ul ON pl.label_id = ul.id
         GROUP BY p.id
         ORDER BY p.${sortBy} ${sortOrder}
         LIMIT ? OFFSET ?
       `;
+
       const [rows] = await connection.query(query, [limit, offset]);
 
-      if (includeLabels) {
-        for (const post of rows) {
-          post.labels = await PostLabel.getLabelsForPost(post.id);
-        }
-      }
-
-      return rows;
+      // Parse labels JSON
+      return rows.map(post => ({
+        ...post,
+        labels: post.labels_json
+          ? JSON.parse(`[${post.labels_json}]`).filter(label => label !== null)
+          : []
+      }));
     });
   }
 
@@ -625,27 +616,42 @@ class Post {
   static async getPostsWithDetails({ limit = 20, page = 1, includeLabels = true, sortBy = 'created_at', sortOrder = 'desc' }) {
     return executeQuery(async (connection) => {
       const offset = (page - 1) * limit;
+
+      // Perbaikan: Gunakan GROUP_CONCAT dengan JSON_OBJECT untuk menghindari N+1 query
       const query = `
-        SELECT p.*, u.name as author_name,
-               COUNT(DISTINCT l.id) as like_count,
-               COUNT(DISTINCT c.id) as comment_count
+        SELECT
+          p.*,
+          u.name as author_name,
+          COUNT(DISTINCT l.id) as like_count,
+          COUNT(DISTINCT c.id) as comment_count,
+          GROUP_CONCAT(
+            DISTINCT JSON_OBJECT(
+              'id', ul.id,
+              'label', ul.label
+            )
+          ) as labels_json
         FROM posts p
         LEFT JOIN users u ON p.author_id = u.id
         LEFT JOIN likes l ON p.id = l.post_id
         LEFT JOIN comments c ON p.id = c.post_id
-        GROUP BY p.id
+        LEFT JOIN post_labels pl ON p.id = pl.post_id
+        LEFT JOIN unique_labels ul ON pl.label_id = ul.id
+        GROUP BY p.id, u.name
         ORDER BY p.${sortBy} ${sortOrder}
         LIMIT ? OFFSET ?
       `;
+
       const [rows] = await connection.query(query, [limit, offset]);
 
-      if (includeLabels) {
-        for (const post of rows) {
-          post.labels = await PostLabel.getLabelsForPost(post.id);
-        }
-      }
+      // Parse labels JSON
+      const formattedPosts = rows.map(post => ({
+        ...post,
+        labels: post.labels_json
+          ? JSON.parse(`[${post.labels_json}]`).filter(label => label !== null)
+          : []
+      }));
 
-      return { posts: rows };
+      return { posts: formattedPosts };
     });
   }
 
