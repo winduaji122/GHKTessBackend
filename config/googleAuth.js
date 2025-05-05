@@ -22,11 +22,21 @@ async function verifyGoogleToken(token) {
   try {
     logger.info('Attempting to verify Google token...');
 
-    // Verifikasi token dengan audience yang benar
-    const ticket = await client.verifyIdToken({
-      idToken: token,
-      audience: GOOGLE_CLIENT_ID, // Gunakan variabel yang sudah diambil dari env
-    });
+    // Tambahkan timeout yang lebih lama untuk verifikasi token
+    const ticket = await Promise.race([
+      client.verifyIdToken({
+        idToken: token,
+        audience: GOOGLE_CLIENT_ID, // Gunakan variabel yang sudah diambil dari env
+      }),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Google token verification timeout')), 30000)
+      )
+    ]);
+
+    if (!ticket) {
+      logger.error('Empty ticket returned from Google token verification');
+      throw new Error('Empty verification result');
+    }
 
     const payload = ticket.getPayload();
 

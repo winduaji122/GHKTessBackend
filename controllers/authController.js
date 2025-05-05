@@ -686,6 +686,15 @@ exports.googleCallback = async (req, res) => {
 
 exports.googleLogin = async (req, res) => {
   try {
+    // Log request untuk debugging
+    console.log('Google login request received:', {
+      service: 'user-service',
+      origin: req.headers.origin,
+      ip: req.ip,
+      userAgent: req.headers['user-agent'],
+      contentType: req.headers['content-type']
+    });
+
     const { token, role } = req.body;
 
     if (!token) {
