@@ -175,9 +175,40 @@ app.use(cors({
   ...corsOptions,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   credentials: true,
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'X-CSRF-Token', 'X-Client-ID', 'X-User-Identity']
+  allowedHeaders: [
+    'Content-Type',
+    'Authorization',
+    'X-Requested-With',
+    'X-CSRF-Token',
+    'X-Client-ID',
+    'X-User-Identity',
+    'Cache-Control',
+    'Pragma',
+    'X-Public-Request',
+    'X-Requested-With'
+  ]
 }));
-app.options('*', cors(corsOptions));
+// Tambahkan middleware khusus untuk menangani preflight request
+app.options('*', (req, res) => {
+  // Log untuk debugging
+  console.log('OPTIONS request received:', {
+    origin: req.headers.origin,
+    path: req.path,
+    headers: req.headers
+  });
+
+  // Set header CORS yang diperlukan
+  res.header('Access-Control-Allow-Origin', req.headers.origin);
+  res.header('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS');
+  res.header('Access-Control-Allow-Credentials', 'true');
+  res.header(
+    'Access-Control-Allow-Headers',
+    'Origin, X-Requested-With, Content-Type, Accept, Authorization, Cache-Control, Pragma, X-Public-Request, X-CSRF-Token, X-Client-ID, X-User-Identity'
+  );
+
+  // Respond dengan 204 No Content
+  res.status(204).end();
+});
 
 // Security middleware
 app.use(helmet({
@@ -204,7 +235,29 @@ app.use(helmet.crossOriginResourcePolicy({ policy: "cross-origin" }));
 
 
 app.use((req, res, next) => {
+  // Set CORS headers untuk semua request
+  const origin = req.headers.origin;
+  if (origin) {
+    res.header('Access-Control-Allow-Origin', origin);
+    res.header('Access-Control-Allow-Credentials', 'true');
+
+    // Set allowed headers
+    res.header(
+      'Access-Control-Allow-Headers',
+      'Origin, X-Requested-With, Content-Type, Accept, Authorization, Cache-Control, Pragma, X-Public-Request, X-CSRF-Token, X-Client-ID, X-User-Identity'
+    );
+
+    // Set exposed headers
+    res.header(
+      'Access-Control-Expose-Headers',
+      'Content-Length, X-CSRF-Token, Authorization'
+    );
+  }
+
   if (req.method === 'OPTIONS') {
+    // Untuk preflight request
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    res.header('Access-Control-Max-Age', '86400'); // 24 jam
     res.sendStatus(204);
   } else {
     logger.info('CORS Request:', {
@@ -229,21 +282,7 @@ const COOKIE_CONFIG = {
   maxAge: 24 * 60 * 60 * 1000 // 24 hours
 };
 
-app.use((req, res, next) => {
-  if (req.method === 'OPTIONS') {
-    // Log preflight requests
-    logger.info('Preflight request:', {
-      origin: req.headers.origin,
-      method: req.method,
-      path: req.path
-    });
-
-    res.header('Access-Control-Max-Age', '86400');
-    res.status(204).end();
-    return;
-  }
-  next();
-});
+// Middleware untuk OPTIONS sudah ditangani di atas
 
 // CSRF protection dengan config yang konsisten
 const csrfProtection = csrf({
