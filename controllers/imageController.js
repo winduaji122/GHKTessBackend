@@ -354,6 +354,17 @@ const imageController = {
 
       if (!fileFound) {
         logger.error(`File not found for image ID: ${id}`);
+
+        // Cek apakah ini adalah environment produksi
+        const isProduction = process.env.NODE_ENV === 'production';
+
+        if (isProduction) {
+          // Redirect ke URL lokal development sebagai fallback
+          const localDevUrl = `http://localhost:5000/uploads/medium/${id}${path.extname(image.medium_path)}`;
+          logger.info(`Redirecting to local development URL: ${localDevUrl}`);
+          return res.redirect(localDevUrl);
+        }
+
         return res.status(404).json({
           success: false,
           message: 'Image file not found',
