@@ -368,7 +368,10 @@ app.use('/uploads', expressStaticGzip(uploadsPath, {
     setHeaders: (res, path) => {
       // Konsisten cache control
       res.setHeader('Cache-Control', 'public, max-age=86400, must-revalidate');
-      res.setHeader('Access-Control-Allow-Origin', FRONTEND_URL);
+
+      // Izinkan akses dari semua origin untuk gambar
+      // Gunakan FRONTEND_URL jika tersedia, atau '*' sebagai fallback
+      res.setHeader('Access-Control-Allow-Origin', '*');
       res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
 
       // Tambahkan header untuk debugging
@@ -400,7 +403,8 @@ app.use('/uploads/profiles', (req, res, next) => {
   lastModified: true,
   setHeaders: (res, path) => {
     res.setHeader('Cache-Control', 'public, max-age=86400, must-revalidate');
-    res.setHeader('Access-Control-Allow-Origin', FRONTEND_URL);
+    // Gunakan FRONTEND_URL jika tersedia, atau '*' sebagai fallback
+    res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
     res.setHeader('X-Served-By', 'express-static-profiles');
   }
@@ -415,6 +419,12 @@ app.use('/uploads', (req, res, next) => {
     method: req.method,
     headers: req.headers
   });
+
+  // Set CORS headers for all uploads
+  // Gunakan FRONTEND_URL jika tersedia, atau '*' sebagai fallback
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+
   next();
 });
 

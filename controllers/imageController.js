@@ -258,6 +258,18 @@ const imageController = {
 
       if (!fileFound) {
         logger.error(`File not found for image ID: ${id}`);
+
+        // Coba gunakan path langsung ke direktori uploads sebagai fallback
+        const directPath = `/uploads/original/${id}${path.extname(image.original_path)}`;
+        logger.info(`Trying direct path as fallback: ${directPath}`);
+
+        // Cek apakah file ada di path langsung
+        const directFilePath = path.join(__dirname, '..', directPath);
+        if (fs.existsSync(directFilePath)) {
+          logger.info(`Found image at direct path: ${directFilePath}`);
+          return res.sendFile(directFilePath);
+        }
+
         return res.status(404).json({
           success: false,
           message: 'Image file not found',
@@ -355,14 +367,15 @@ const imageController = {
       if (!fileFound) {
         logger.error(`File not found for image ID: ${id}`);
 
-        // Cek apakah ini adalah environment produksi
-        const isProduction = process.env.NODE_ENV === 'production';
+        // Coba gunakan path langsung ke direktori uploads sebagai fallback
+        const directPath = `/uploads/medium/${id}${path.extname(image.medium_path)}`;
+        logger.info(`Trying direct path as fallback: ${directPath}`);
 
-        if (isProduction) {
-          // Redirect ke URL lokal development sebagai fallback
-          const localDevUrl = `http://localhost:5000/uploads/medium/${id}${path.extname(image.medium_path)}`;
-          logger.info(`Redirecting to local development URL: ${localDevUrl}`);
-          return res.redirect(localDevUrl);
+        // Cek apakah file ada di path langsung
+        const directFilePath = path.join(__dirname, '..', directPath);
+        if (fs.existsSync(directFilePath)) {
+          logger.info(`Found image at direct path: ${directFilePath}`);
+          return res.sendFile(directFilePath);
         }
 
         return res.status(404).json({
@@ -461,6 +474,18 @@ const imageController = {
 
       if (!fileFound) {
         logger.error(`File not found for image ID: ${id}`);
+
+        // Coba gunakan path langsung ke direktori uploads sebagai fallback
+        const directPath = `/uploads/thumbnail/${id}${path.extname(image.thumbnail_path)}`;
+        logger.info(`Trying direct path as fallback: ${directPath}`);
+
+        // Cek apakah file ada di path langsung
+        const directFilePath = path.join(__dirname, '..', directPath);
+        if (fs.existsSync(directFilePath)) {
+          logger.info(`Found image at direct path: ${directFilePath}`);
+          return res.sendFile(directFilePath);
+        }
+
         return res.status(404).json({
           success: false,
           message: 'Image file not found',
