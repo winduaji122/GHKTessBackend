@@ -193,11 +193,18 @@ const imageController = {
       const image = await Image.findById(id);
 
       if (!image) {
+        logger.error(`Image not found with ID: ${id}`);
         return res.status(404).json({
           success: false,
           message: 'Image not found'
         });
       }
+
+      // Log untuk debugging
+      logger.info(`Serving original image: ${id}`, {
+        path: image.original_path,
+        mimeType: image.mime_type
+      });
 
       // Set cache headers
       res.set({
@@ -209,19 +216,57 @@ const imageController = {
       // Dapatkan path lengkap ke file
       const fs = require('fs');
       const path = require('path');
-      const filePath = path.join(__dirname, '..', image.original_path);
 
-      // Periksa apakah file ada
-      if (!fs.existsSync(filePath)) {
-        logger.error(`File not found: ${filePath}`);
+      // Coba beberapa kemungkinan path
+      const possiblePaths = [
+        // Path yang disimpan di database
+        path.join(__dirname, '..', image.original_path),
+        // Path relatif terhadap root
+        path.join(__dirname, '..', 'uploads', 'original', `${id}${path.extname(image.original_path)}`),
+        // Path absolut
+        path.resolve(image.original_path)
+      ];
+
+      let fileFound = false;
+      let foundPath = '';
+
+      for (const filePath of possiblePaths) {
+        if (fs.existsSync(filePath)) {
+          fileFound = true;
+          foundPath = filePath;
+          logger.info(`Found image at: ${filePath}`);
+          break;
+        } else {
+          logger.warn(`File not found at: ${filePath}`);
+        }
+      }
+
+      if (!fileFound) {
+        // Coba cari file berdasarkan ID di direktori uploads/original
+        const uploadsDir = path.join(__dirname, '..', 'uploads', 'original');
+        const files = fs.readdirSync(uploadsDir);
+
+        for (const file of files) {
+          if (file.startsWith(id)) {
+            fileFound = true;
+            foundPath = path.join(uploadsDir, file);
+            logger.info(`Found image by ID search: ${foundPath}`);
+            break;
+          }
+        }
+      }
+
+      if (!fileFound) {
+        logger.error(`File not found for image ID: ${id}`);
         return res.status(404).json({
           success: false,
-          message: 'Image file not found'
+          message: 'Image file not found',
+          paths: possiblePaths
         });
       }
 
       // Kirim file langsung
-      return res.sendFile(filePath);
+      return res.sendFile(foundPath);
     } catch (error) {
       logger.error('Error in getOriginalImage controller:', error);
       return res.status(500).json({
@@ -244,11 +289,18 @@ const imageController = {
       const image = await Image.findById(id);
 
       if (!image) {
+        logger.error(`Image not found with ID: ${id}`);
         return res.status(404).json({
           success: false,
           message: 'Image not found'
         });
       }
+
+      // Log untuk debugging
+      logger.info(`Serving medium image: ${id}`, {
+        path: image.medium_path,
+        mimeType: image.mime_type
+      });
 
       // Set cache headers
       res.set({
@@ -260,19 +312,57 @@ const imageController = {
       // Dapatkan path lengkap ke file
       const fs = require('fs');
       const path = require('path');
-      const filePath = path.join(__dirname, '..', image.medium_path);
 
-      // Periksa apakah file ada
-      if (!fs.existsSync(filePath)) {
-        logger.error(`File not found: ${filePath}`);
+      // Coba beberapa kemungkinan path
+      const possiblePaths = [
+        // Path yang disimpan di database
+        path.join(__dirname, '..', image.medium_path),
+        // Path relatif terhadap root
+        path.join(__dirname, '..', 'uploads', 'medium', `${id}${path.extname(image.medium_path)}`),
+        // Path absolut
+        path.resolve(image.medium_path)
+      ];
+
+      let fileFound = false;
+      let foundPath = '';
+
+      for (const filePath of possiblePaths) {
+        if (fs.existsSync(filePath)) {
+          fileFound = true;
+          foundPath = filePath;
+          logger.info(`Found image at: ${filePath}`);
+          break;
+        } else {
+          logger.warn(`File not found at: ${filePath}`);
+        }
+      }
+
+      if (!fileFound) {
+        // Coba cari file berdasarkan ID di direktori uploads/medium
+        const uploadsDir = path.join(__dirname, '..', 'uploads', 'medium');
+        const files = fs.readdirSync(uploadsDir);
+
+        for (const file of files) {
+          if (file.startsWith(id)) {
+            fileFound = true;
+            foundPath = path.join(uploadsDir, file);
+            logger.info(`Found image by ID search: ${foundPath}`);
+            break;
+          }
+        }
+      }
+
+      if (!fileFound) {
+        logger.error(`File not found for image ID: ${id}`);
         return res.status(404).json({
           success: false,
-          message: 'Image file not found'
+          message: 'Image file not found',
+          paths: possiblePaths
         });
       }
 
       // Kirim file langsung
-      return res.sendFile(filePath);
+      return res.sendFile(foundPath);
     } catch (error) {
       logger.error('Error in getMediumImage controller:', error);
       return res.status(500).json({
@@ -295,11 +385,18 @@ const imageController = {
       const image = await Image.findById(id);
 
       if (!image) {
+        logger.error(`Image not found with ID: ${id}`);
         return res.status(404).json({
           success: false,
           message: 'Image not found'
         });
       }
+
+      // Log untuk debugging
+      logger.info(`Serving thumbnail image: ${id}`, {
+        path: image.thumbnail_path,
+        mimeType: image.mime_type
+      });
 
       // Set cache headers
       res.set({
@@ -311,19 +408,57 @@ const imageController = {
       // Dapatkan path lengkap ke file
       const fs = require('fs');
       const path = require('path');
-      const filePath = path.join(__dirname, '..', image.thumbnail_path);
 
-      // Periksa apakah file ada
-      if (!fs.existsSync(filePath)) {
-        logger.error(`File not found: ${filePath}`);
+      // Coba beberapa kemungkinan path
+      const possiblePaths = [
+        // Path yang disimpan di database
+        path.join(__dirname, '..', image.thumbnail_path),
+        // Path relatif terhadap root
+        path.join(__dirname, '..', 'uploads', 'thumbnail', `${id}${path.extname(image.thumbnail_path)}`),
+        // Path absolut
+        path.resolve(image.thumbnail_path)
+      ];
+
+      let fileFound = false;
+      let foundPath = '';
+
+      for (const filePath of possiblePaths) {
+        if (fs.existsSync(filePath)) {
+          fileFound = true;
+          foundPath = filePath;
+          logger.info(`Found image at: ${filePath}`);
+          break;
+        } else {
+          logger.warn(`File not found at: ${filePath}`);
+        }
+      }
+
+      if (!fileFound) {
+        // Coba cari file berdasarkan ID di direktori uploads/thumbnail
+        const uploadsDir = path.join(__dirname, '..', 'uploads', 'thumbnail');
+        const files = fs.readdirSync(uploadsDir);
+
+        for (const file of files) {
+          if (file.startsWith(id)) {
+            fileFound = true;
+            foundPath = path.join(uploadsDir, file);
+            logger.info(`Found image by ID search: ${foundPath}`);
+            break;
+          }
+        }
+      }
+
+      if (!fileFound) {
+        logger.error(`File not found for image ID: ${id}`);
         return res.status(404).json({
           success: false,
-          message: 'Image file not found'
+          message: 'Image file not found',
+          paths: possiblePaths
         });
       }
 
       // Kirim file langsung
-      return res.sendFile(filePath);
+      return res.sendFile(foundPath);
     } catch (error) {
       logger.error('Error in getThumbnailImage controller:', error);
       return res.status(500).json({
