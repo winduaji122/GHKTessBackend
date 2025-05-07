@@ -48,6 +48,7 @@ const labelsRouter = require('./routes/labels');
 const postsRouter = require('./routes/posts');
 const searchRoutes = require('./routes/search');
 const uploadRoutes = require('./routes/uploadRoutes');
+const imageRoutes = require('./routes/imageRoutes'); // Tambahkan route baru
 const carouselRoutes = require('./routes/carouselRoutes');
 const carouselPostRoutes = require('./routes/carouselPostRoutes');
 const commentsRouter = require('./routes/comments');
@@ -575,6 +576,9 @@ app.use('/api/posts',
 );
 
 app.use('/api/upload', uploadRoutes);
+
+// Tambahkan route baru untuk image API dengan kompresi
+app.use('/api/images', imageRoutes);
 
 app.use('/api/carousel', carouselRoutes);
 app.use('/api/carousel-post', carouselPostRoutes);

@@ -3,25 +3,35 @@ const path = require('path');
 const fs = require('fs').promises;
 const { logger } = require('./utils/logger');
 const crypto = require('crypto');
+const sharp = require('sharp');
 
 // Gunakan direktori persisten di Render jika tersedia
 const uploadDir = process.env.NODE_ENV === 'production' && process.env.RENDER_PERSISTENT_DIR
   ? path.join(process.env.RENDER_PERSISTENT_DIR, 'uploads')
   : path.join(__dirname, 'uploads');
 
+// Subdirektori untuk versi gambar
+const originalDir = path.join(uploadDir, 'original');
+const thumbnailDir = path.join(uploadDir, 'thumbnail');
+const mediumDir = path.join(uploadDir, 'medium');
+const tempDir = path.join(uploadDir, 'temp');
+
 // Inisialisasi direktori dengan error handling yang lebih baik
 const initializeUploadDir = async () => {
   try {
-    await fs.access(uploadDir);
-    logger.info('Upload directory exists');
+    // Buat direktori utama
+    await fs.mkdir(uploadDir, { recursive: true });
+
+    // Buat subdirektori untuk versi gambar
+    await fs.mkdir(originalDir, { recursive: true });
+    await fs.mkdir(thumbnailDir, { recursive: true });
+    await fs.mkdir(mediumDir, { recursive: true });
+    await fs.mkdir(tempDir, { recursive: true });
+
+    logger.info('Upload directories created successfully');
   } catch (error) {
-    try {
-      await fs.mkdir(uploadDir, { recursive: true });
-      logger.info('Upload directory created');
-    } catch (mkdirError) {
-      logger.error('Failed to create upload directory:', mkdirError);
-      throw new Error('Failed to initialize upload directory');
-    }
+    logger.error('Failed to create upload directories:', error);
+    throw new Error('Failed to initialize upload directories');
   }
 };
 
@@ -35,10 +45,11 @@ const sanitizeFilename = (filename) => {
     .toLowerCase();
 };
 
-// Perbaikan storage configuration
+// Perbaikan storage configuration - simpan ke direktori temp terlebih dahulu
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    cb(null, uploadDir);
+    // Simpan file upload ke direktori temp terlebih dahulu
+    cb(null, tempDir);
   },
   filename: (req, file, cb) => {
     const uniqueHash = crypto.randomBytes(8).toString('hex');
@@ -148,6 +159,10 @@ const fileExists = async (filename) => {
 module.exports = {
   upload,
   uploadDir,
+  originalDir,
+  thumbnailDir,
+  mediumDir,
+  tempDir,
   handleMulterError,
   deleteFile,
   fileExists,

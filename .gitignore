@@ -25,3 +25,16 @@ logs/*
 .env
 .env.production
 .env.production.local
+
+# Database files
+DATABASE TABLE/
+C:/Users/USER/Documents/GHK/my-react-app/DATABASE TABLE/
+
+# Backup files
+*.bak
+server.js.bak
+
+# Local development files
+how
+run-prod-local.bat
+start-prod-local.bat
