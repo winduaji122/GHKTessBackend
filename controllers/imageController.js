@@ -202,11 +202,26 @@ const imageController = {
       // Set cache headers
       res.set({
         'Cache-Control': 'public, max-age=31536000',
-        'Expires': new Date(Date.now() + 31536000000).toUTCString()
+        'Expires': new Date(Date.now() + 31536000000).toUTCString(),
+        'Cross-Origin-Resource-Policy': 'cross-origin'
       });
 
-      // Redirect ke path gambar asli
-      return res.redirect(`/${image.original_path}`);
+      // Dapatkan path lengkap ke file
+      const fs = require('fs');
+      const path = require('path');
+      const filePath = path.join(__dirname, '..', image.original_path);
+
+      // Periksa apakah file ada
+      if (!fs.existsSync(filePath)) {
+        logger.error(`File not found: ${filePath}`);
+        return res.status(404).json({
+          success: false,
+          message: 'Image file not found'
+        });
+      }
+
+      // Kirim file langsung
+      return res.sendFile(filePath);
     } catch (error) {
       logger.error('Error in getOriginalImage controller:', error);
       return res.status(500).json({
@@ -238,11 +253,26 @@ const imageController = {
       // Set cache headers
       res.set({
         'Cache-Control': 'public, max-age=31536000',
-        'Expires': new Date(Date.now() + 31536000000).toUTCString()
+        'Expires': new Date(Date.now() + 31536000000).toUTCString(),
+        'Cross-Origin-Resource-Policy': 'cross-origin'
       });
 
-      // Redirect ke path gambar ukuran sedang
-      return res.redirect(`/${image.medium_path}`);
+      // Dapatkan path lengkap ke file
+      const fs = require('fs');
+      const path = require('path');
+      const filePath = path.join(__dirname, '..', image.medium_path);
+
+      // Periksa apakah file ada
+      if (!fs.existsSync(filePath)) {
+        logger.error(`File not found: ${filePath}`);
+        return res.status(404).json({
+          success: false,
+          message: 'Image file not found'
+        });
+      }
+
+      // Kirim file langsung
+      return res.sendFile(filePath);
     } catch (error) {
       logger.error('Error in getMediumImage controller:', error);
       return res.status(500).json({
@@ -274,11 +304,26 @@ const imageController = {
       // Set cache headers
       res.set({
         'Cache-Control': 'public, max-age=31536000',
-        'Expires': new Date(Date.now() + 31536000000).toUTCString()
+        'Expires': new Date(Date.now() + 31536000000).toUTCString(),
+        'Cross-Origin-Resource-Policy': 'cross-origin'
       });
 
-      // Redirect ke path gambar thumbnail
-      return res.redirect(`/${image.thumbnail_path}`);
+      // Dapatkan path lengkap ke file
+      const fs = require('fs');
+      const path = require('path');
+      const filePath = path.join(__dirname, '..', image.thumbnail_path);
+
+      // Periksa apakah file ada
+      if (!fs.existsSync(filePath)) {
+        logger.error(`File not found: ${filePath}`);
+        return res.status(404).json({
+          success: false,
+          message: 'Image file not found'
+        });
+      }
+
+      // Kirim file langsung
+      return res.sendFile(filePath);
     } catch (error) {
       logger.error('Error in getThumbnailImage controller:', error);
       return res.status(500).json({
