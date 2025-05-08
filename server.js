@@ -410,6 +410,118 @@ app.use('/uploads/profiles', (req, res, next) => {
   }
 }));
 
+// Konfigurasi khusus untuk direktori /uploads/original/
+const originalPath = path.join(uploadsPath, 'original');
+if (!fs.existsSync(originalPath)) {
+  fs.mkdirSync(originalPath, { recursive: true });
+}
+app.use('/uploads/original', (req, res, next) => {
+  // Log akses ke file original
+  const filePath = path.join(originalPath, req.path);
+  logger.info('Original image accessed:', {
+    path: req.path,
+    fullPath: filePath,
+    exists: fs.existsSync(filePath),
+    method: req.method,
+    headers: req.headers
+  });
+  next();
+}, express.static(originalPath, {
+  maxAge: '1d',
+  etag: true,
+  lastModified: true,
+  setHeaders: (res, path) => {
+    res.setHeader('Cache-Control', 'public, max-age=86400, must-revalidate');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+    res.setHeader('X-Served-By', 'express-static-original');
+  }
+}));
+
+// Konfigurasi khusus untuk direktori /uploads/medium/
+const mediumPath = path.join(uploadsPath, 'medium');
+if (!fs.existsSync(mediumPath)) {
+  fs.mkdirSync(mediumPath, { recursive: true });
+}
+app.use('/uploads/medium', (req, res, next) => {
+  // Log akses ke file medium
+  const filePath = path.join(mediumPath, req.path);
+  logger.info('Medium image accessed:', {
+    path: req.path,
+    fullPath: filePath,
+    exists: fs.existsSync(filePath),
+    method: req.method,
+    headers: req.headers
+  });
+  next();
+}, express.static(mediumPath, {
+  maxAge: '1d',
+  etag: true,
+  lastModified: true,
+  setHeaders: (res, path) => {
+    res.setHeader('Cache-Control', 'public, max-age=86400, must-revalidate');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+    res.setHeader('X-Served-By', 'express-static-medium');
+  }
+}));
+
+// Konfigurasi khusus untuk direktori /uploads/thumbnail/
+const thumbnailPath = path.join(uploadsPath, 'thumbnail');
+if (!fs.existsSync(thumbnailPath)) {
+  fs.mkdirSync(thumbnailPath, { recursive: true });
+}
+app.use('/uploads/thumbnail', (req, res, next) => {
+  // Log akses ke file thumbnail
+  const filePath = path.join(thumbnailPath, req.path);
+  logger.info('Thumbnail image accessed:', {
+    path: req.path,
+    fullPath: filePath,
+    exists: fs.existsSync(filePath),
+    method: req.method,
+    headers: req.headers
+  });
+  next();
+}, express.static(thumbnailPath, {
+  maxAge: '1d',
+  etag: true,
+  lastModified: true,
+  setHeaders: (res, path) => {
+    res.setHeader('Cache-Control', 'public, max-age=86400, must-revalidate');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+    res.setHeader('X-Served-By', 'express-static-thumbnail');
+  }
+}));
+
+// Konfigurasi khusus untuk direktori /uploads/carousel/
+const carouselPath = path.join(uploadsPath, 'carousel');
+if (!fs.existsSync(carouselPath)) {
+  fs.mkdirSync(carouselPath, { recursive: true });
+}
+app.use('/uploads/carousel', (req, res, next) => {
+  // Log akses ke file carousel
+  const filePath = path.join(carouselPath, req.path);
+  logger.info('Carousel image accessed:', {
+    path: req.path,
+    fullPath: filePath,
+    exists: fs.existsSync(filePath),
+    method: req.method,
+    headers: req.headers
+  });
+  next();
+}, express.static(carouselPath, {
+  maxAge: '1d',
+  etag: true,
+  lastModified: true,
+  setHeaders: (res, path) => {
+    res.setHeader('Cache-Control', 'public, max-age=86400, must-revalidate');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+    res.setHeader('X-Served-By', 'express-static-carousel');
+  }
+}));
+
 app.use('/uploads', (req, res, next) => {
   const filePath = path.join(uploadsPath, req.path);
   logger.info('Accessing upload file:', {
@@ -500,6 +612,7 @@ app.get('/api/check-directories', (req, res) => {
 
       let isWritable = false;
       let files = [];
+      let accessibleUrls = [];
 
       if (exists) {
         try {
@@ -513,6 +626,12 @@ app.get('/api/check-directories', (req, res) => {
           files = fs.readdirSync(dirPath)
             .filter(file => !file.startsWith('.')) // Abaikan file tersembunyi
             .slice(0, 10); // Batasi 10 file saja
+
+          // Buat URL untuk setiap file
+          accessibleUrls = files.map(file => {
+            const baseUrl = process.env.BASE_URL || `http://localhost:${process.env.PORT || 5000}`;
+            return `${baseUrl}/${dir}/${file}`;
+          });
         } catch (error) {
           logger.error(`Error checking directory ${dir}:`, error);
         }
@@ -522,6 +641,7 @@ app.get('/api/check-directories', (req, res) => {
         exists,
         isWritable,
         files,
+        accessibleUrls,
         path: dirPath
       };
     }
@@ -535,6 +655,96 @@ app.get('/api/check-directories', (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Error checking directories',
+      error: error.message
+    });
+  }
+});
+
+// Route untuk memeriksa file di direktori uploads
+app.get('/api/check-file-access/:directory/:filename', (req, res) => {
+  try {
+    const { directory, filename } = req.params;
+
+    // Validasi direktori
+    const allowedDirectories = ['original', 'medium', 'thumbnail', 'profiles', 'carousel', 'temp'];
+    if (!allowedDirectories.includes(directory)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid directory',
+        allowedDirectories
+      });
+    }
+
+    // Buat path file
+    const dirPath = path.join(__dirname, 'uploads', directory);
+    const filePath = path.join(dirPath, filename);
+
+    // Periksa apakah file ada
+    const exists = fs.existsSync(filePath);
+
+    // Buat URL untuk file
+    const baseUrl = process.env.BASE_URL || `http://localhost:${process.env.PORT || 5000}`;
+    const fileUrl = `${baseUrl}/uploads/${directory}/${filename}`;
+
+    // Buat URL alternatif
+    const alternativeUrls = [];
+    if (exists) {
+      // Coba beberapa format URL
+      alternativeUrls.push(fileUrl);
+      alternativeUrls.push(`${baseUrl}/api/images/${filename.split('.')[0]}/${directory}`);
+    }
+
+    if (exists) {
+      // Baca informasi file
+      const stats = fs.statSync(filePath);
+
+      // Baca beberapa byte pertama untuk menentukan tipe file
+      const buffer = Buffer.alloc(16);
+      const fd = fs.openSync(filePath, 'r');
+      fs.readSync(fd, buffer, 0, 16, 0);
+      fs.closeSync(fd);
+
+      // Deteksi tipe file berdasarkan magic number
+      let fileType = 'unknown';
+      if (buffer[0] === 0xFF && buffer[1] === 0xD8 && buffer[2] === 0xFF) {
+        fileType = 'image/jpeg';
+      } else if (buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4E && buffer[3] === 0x47) {
+        fileType = 'image/png';
+      } else if (buffer[0] === 0x47 && buffer[1] === 0x49 && buffer[2] === 0x46) {
+        fileType = 'image/gif';
+      } else if (buffer[8] === 0x57 && buffer[9] === 0x45 && buffer[10] === 0x42 && buffer[11] === 0x50) {
+        fileType = 'image/webp';
+      }
+
+      res.json({
+        success: true,
+        exists: true,
+        filename,
+        directory,
+        path: filePath,
+        url: fileUrl,
+        alternativeUrls,
+        size: stats.size,
+        created: stats.birthtime,
+        modified: stats.mtime,
+        permissions: stats.mode,
+        fileType
+      });
+    } else {
+      res.status(404).json({
+        success: false,
+        exists: false,
+        filename,
+        directory,
+        path: filePath,
+        message: 'File not found'
+      });
+    }
+  } catch (error) {
+    logger.error('Error checking file access:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error checking file access',
       error: error.message
     });
   }
@@ -583,6 +793,101 @@ app.get('/api/debug/cors', (req, res) => {
     origin: req.headers.origin,
     method: req.method
   });
+});
+
+// Tambahkan route untuk memeriksa akses CORS ke file statis
+app.get('/api/debug/cors-file/:directory/:filename', (req, res) => {
+  try {
+    const { directory, filename } = req.params;
+
+    // Validasi direktori
+    const allowedDirectories = ['original', 'medium', 'thumbnail', 'profiles', 'carousel', 'temp'];
+    if (!allowedDirectories.includes(directory)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid directory',
+        allowedDirectories
+      });
+    }
+
+    // Buat path file
+    const dirPath = path.join(__dirname, 'uploads', directory);
+    const filePath = path.join(dirPath, filename);
+
+    // Periksa apakah file ada
+    const exists = fs.existsSync(filePath);
+
+    if (!exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'File not found',
+        path: filePath
+      });
+    }
+
+    // Buat URL untuk file
+    const baseUrl = process.env.BASE_URL || `http://localhost:${process.env.PORT || 5000}`;
+    const fileUrl = `${baseUrl}/uploads/${directory}/${filename}`;
+
+    // Buat HTML untuk memeriksa akses CORS
+    const html = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <title>CORS Test</title>
+        <style>
+          body { font-family: Arial, sans-serif; margin: 20px; }
+          .result { margin-top: 20px; padding: 10px; border: 1px solid #ccc; }
+          .success { color: green; }
+          .error { color: red; }
+          img { max-width: 300px; border: 1px solid #ccc; }
+        </style>
+      </head>
+      <body>
+        <h1>CORS Test for ${fileUrl}</h1>
+        <p>This page tests if the file can be accessed from a browser.</p>
+
+        <h2>Direct Image Tag Test</h2>
+        <img src="${fileUrl}" alt="Test Image" onerror="document.getElementById('img-error').style.display='block'" onload="document.getElementById('img-success').style.display='block'">
+        <div id="img-success" class="result success" style="display:none">Image loaded successfully!</div>
+        <div id="img-error" class="result error" style="display:none">Failed to load image!</div>
+
+        <h2>Fetch API Test</h2>
+        <div id="fetch-result" class="result">Testing...</div>
+
+        <script>
+          // Test with Fetch API
+          fetch('${fileUrl}')
+            .then(response => {
+              if (!response.ok) {
+                throw new Error('Network response was not ok: ' + response.status);
+              }
+              return response.blob();
+            })
+            .then(blob => {
+              document.getElementById('fetch-result').innerHTML = 'Fetch successful! Content type: ' + blob.type + ', size: ' + blob.size + ' bytes';
+              document.getElementById('fetch-result').className = 'result success';
+            })
+            .catch(error => {
+              document.getElementById('fetch-result').innerHTML = 'Fetch failed: ' + error.message;
+              document.getElementById('fetch-result').className = 'result error';
+            });
+        </script>
+      </body>
+      </html>
+    `;
+
+    // Kirim HTML
+    res.setHeader('Content-Type', 'text/html');
+    res.send(html);
+  } catch (error) {
+    logger.error('Error in CORS file test:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error in CORS file test',
+      error: error.message
+    });
+  }
 });
 
 // Middleware untuk memeriksa apakah request adalah request publik
