@@ -731,13 +731,65 @@ app.get('/api/check-file-access/:directory/:filename', (req, res) => {
         fileType
       });
     } else {
+      // Coba cari file dengan ekstensi yang berbeda
+      const filenameWithoutExt = filename.replace(/\.[^/.]+$/, '');
+      const extensions = ['.jpg', '.jpeg', '.png', '.webp', '.gif', ''];
+
+      // Cari file dengan ekstensi yang berbeda
+      for (const ext of extensions) {
+        const altFilename = filenameWithoutExt + ext;
+        const altFilePath = path.join(dirPath, altFilename);
+
+        if (fs.existsSync(altFilePath)) {
+          // File ditemukan dengan ekstensi yang berbeda
+          const altFileUrl = `${baseUrl}/uploads/${directory}/${altFilename}`;
+          const stats = fs.statSync(altFilePath);
+
+          // Baca beberapa byte pertama untuk menentukan tipe file
+          const buffer = Buffer.alloc(16);
+          const fd = fs.openSync(altFilePath, 'r');
+          fs.readSync(fd, buffer, 0, 16, 0);
+          fs.closeSync(fd);
+
+          // Deteksi tipe file berdasarkan magic number
+          let fileType = 'unknown';
+          if (buffer[0] === 0xFF && buffer[1] === 0xD8 && buffer[2] === 0xFF) {
+            fileType = 'image/jpeg';
+          } else if (buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4E && buffer[3] === 0x47) {
+            fileType = 'image/png';
+          } else if (buffer[0] === 0x47 && buffer[1] === 0x49 && buffer[2] === 0x46) {
+            fileType = 'image/gif';
+          } else if (buffer[8] === 0x57 && buffer[9] === 0x45 && buffer[10] === 0x42 && buffer[11] === 0x50) {
+            fileType = 'image/webp';
+          }
+
+          return res.json({
+            success: true,
+            exists: true,
+            filename: altFilename,
+            originalFilename: filename,
+            directory,
+            path: altFilePath,
+            url: altFileUrl,
+            alternativeUrls: [altFileUrl],
+            size: stats.size,
+            created: stats.birthtime,
+            modified: stats.mtime,
+            permissions: stats.mode,
+            fileType,
+            message: `File found with different extension: ${ext || 'no extension'}`
+          });
+        }
+      }
+
+      // Jika tidak ditemukan file dengan ekstensi apapun
       res.status(404).json({
         success: false,
         exists: false,
         filename,
         directory,
         path: filePath,
-        message: 'File not found'
+        message: 'File not found with any extension'
       });
     }
   } catch (error) {
@@ -745,6 +797,87 @@ app.get('/api/check-file-access/:directory/:filename', (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Error checking file access',
+      error: error.message
+    });
+  }
+});
+
+// Route untuk mendapatkan database gambar
+app.get('/api/images/database', (req, res) => {
+  try {
+    // Baca direktori uploads/original
+    const originalDir = path.join(__dirname, 'uploads', 'original');
+    const mediumDir = path.join(__dirname, 'uploads', 'medium');
+    const thumbnailDir = path.join(__dirname, 'uploads', 'thumbnail');
+
+    // Periksa apakah direktori ada
+    if (!fs.existsSync(originalDir)) {
+      return res.status(404).json({
+        success: false,
+        message: 'Original directory not found'
+      });
+    }
+
+    // Baca semua file di direktori original
+    const files = fs.readdirSync(originalDir);
+
+    // Buat database gambar
+    const images = files.map(file => {
+      // Ekstrak ID dari nama file
+      const id = file.replace(/\.[^/.]+$/, '');
+
+      // Tentukan path untuk setiap ukuran
+      const originalPath = `uploads/original/${file}`;
+
+      // Cek apakah file medium ada
+      let mediumPath = `uploads/medium/${id}`;
+      if (fs.existsSync(path.join(mediumDir, file))) {
+        mediumPath = `uploads/medium/${file}`;
+      } else {
+        // Coba cari file dengan ekstensi yang berbeda
+        const extensions = ['.jpg', '.jpeg', '.png', '.webp', '.gif', ''];
+        for (const ext of extensions) {
+          const mediumFile = id + ext;
+          if (fs.existsSync(path.join(mediumDir, mediumFile))) {
+            mediumPath = `uploads/medium/${mediumFile}`;
+            break;
+          }
+        }
+      }
+
+      // Cek apakah file thumbnail ada
+      let thumbnailPath = `uploads/thumbnail/${id}`;
+      if (fs.existsSync(path.join(thumbnailDir, file))) {
+        thumbnailPath = `uploads/thumbnail/${file}`;
+      } else {
+        // Coba cari file dengan ekstensi yang berbeda
+        const extensions = ['.jpg', '.jpeg', '.png', '.webp', '.gif', ''];
+        for (const ext of extensions) {
+          const thumbnailFile = id + ext;
+          if (fs.existsSync(path.join(thumbnailDir, thumbnailFile))) {
+            thumbnailPath = `uploads/thumbnail/${thumbnailFile}`;
+            break;
+          }
+        }
+      }
+
+      return {
+        id,
+        original_path: originalPath,
+        medium_path: mediumPath,
+        thumbnail_path: thumbnailPath
+      };
+    });
+
+    res.json({
+      success: true,
+      images
+    });
+  } catch (error) {
+    logger.error('Error getting image database:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error getting image database',
       error: error.message
     });
   }
