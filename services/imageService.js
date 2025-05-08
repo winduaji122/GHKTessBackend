@@ -34,16 +34,42 @@ class ImageService {
 
       // Buat direktori jika belum ada
       const uploadsDir = path.join(__dirname, '..', 'uploads');
-      await this.ensureDirectoryExists(uploadsDir);
+      const dirCreated = await this.ensureDirectoryExists(uploadsDir);
+
+      if (!dirCreated) {
+        logger.error('Failed to create or access uploads directory');
+        throw new Error('Failed to create or access uploads directory');
+      }
 
       // Buat subdirektori untuk versi gambar
       const originalDir = path.join(uploadsDir, 'original');
       const thumbnailDir = path.join(uploadsDir, 'thumbnail');
       const mediumDir = path.join(uploadsDir, 'medium');
+      const tempDir = path.join(uploadsDir, 'temp');
 
-      await this.ensureDirectoryExists(originalDir);
-      await this.ensureDirectoryExists(thumbnailDir);
-      await this.ensureDirectoryExists(mediumDir);
+      // Coba buat semua direktori yang diperlukan
+      const originalDirCreated = await this.ensureDirectoryExists(originalDir);
+      const thumbnailDirCreated = await this.ensureDirectoryExists(thumbnailDir);
+      const mediumDirCreated = await this.ensureDirectoryExists(mediumDir);
+      const tempDirCreated = await this.ensureDirectoryExists(tempDir);
+
+      // Periksa apakah semua direktori berhasil dibuat
+      if (!originalDirCreated || !thumbnailDirCreated || !mediumDirCreated || !tempDirCreated) {
+        logger.error('Failed to create one or more required directories');
+        logger.error(`Original: ${originalDirCreated}, Thumbnail: ${thumbnailDirCreated}, Medium: ${mediumDirCreated}, Temp: ${tempDirCreated}`);
+
+        // Coba buat direktori dengan mode izin yang lebih permisif
+        try {
+          await fs.mkdir(originalDir, { recursive: true, mode: 0o777 });
+          await fs.mkdir(thumbnailDir, { recursive: true, mode: 0o777 });
+          await fs.mkdir(mediumDir, { recursive: true, mode: 0o777 });
+          await fs.mkdir(tempDir, { recursive: true, mode: 0o777 });
+          logger.info('Directories created with permissive permissions');
+        } catch (mkdirError) {
+          logger.error('Failed to create directories with permissive permissions:', mkdirError);
+          throw new Error('Failed to create required directories for image processing');
+        }
+      }
 
       // Generate unique ID untuk gambar
       const imageId = uuidv4();
@@ -146,13 +172,39 @@ class ImageService {
   /**
    * Pastikan direktori ada, buat jika belum ada
    * @param {string} dir - Path direktori
-   * @returns {Promise<void>}
+   * @returns {Promise<boolean>} - true jika direktori ada dan dapat ditulis
    */
   static async ensureDirectoryExists(dir) {
     try {
-      await fs.access(dir);
+      try {
+        await fs.access(dir, fs.constants.W_OK);
+        logger.info(`Directory exists and is writable: ${dir}`);
+        return true;
+      } catch (error) {
+        logger.warn(`Directory not accessible or not writable: ${dir}`, error);
+
+        // Coba buat direktori dengan izin eksplisit
+        await fs.mkdir(dir, { recursive: true, mode: 0o777 });
+
+        // Verifikasi direktori telah dibuat dan dapat ditulis
+        try {
+          await fs.access(dir, fs.constants.W_OK);
+
+          // Tulis file test untuk memastikan direktori dapat ditulis
+          const testFile = path.join(dir, '.test-write');
+          await fs.writeFile(testFile, 'test');
+          await fs.unlink(testFile);
+
+          logger.info(`Directory created and is writable: ${dir}`);
+          return true;
+        } catch (verifyError) {
+          logger.error(`Directory created but not writable: ${dir}`, verifyError);
+          return false;
+        }
+      }
     } catch (error) {
-      await fs.mkdir(dir, { recursive: true });
+      logger.error(`Failed to create directory: ${dir}`, error);
+      return false;
     }
   }
 

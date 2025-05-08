@@ -28,15 +28,56 @@ const initializeUploadDir = async () => {
     await fs.mkdir(mediumDir, { recursive: true });
     await fs.mkdir(tempDir, { recursive: true });
 
+    // Buat direktori profiles jika belum ada
+    const profilesDir = path.join(uploadDir, 'profiles');
+    await fs.mkdir(profilesDir, { recursive: true });
+
+    // Buat direktori carousel jika belum ada
+    const carouselDir = path.join(uploadDir, 'carousel');
+    await fs.mkdir(carouselDir, { recursive: true });
+
+    // Verifikasi direktori telah dibuat
+    const dirs = [uploadDir, originalDir, thumbnailDir, mediumDir, tempDir, profilesDir, carouselDir];
+    for (const dir of dirs) {
+      try {
+        await fs.access(dir, fs.constants.W_OK);
+        logger.info(`Directory exists and is writable: ${dir}`);
+      } catch (err) {
+        logger.error(`Directory not accessible or not writable: ${dir}`, err);
+
+        // Coba buat lagi dengan mode izin eksplisit
+        try {
+          await fs.mkdir(dir, { recursive: true, mode: 0o777 });
+          logger.info(`Recreated directory with explicit permissions: ${dir}`);
+        } catch (mkdirErr) {
+          logger.error(`Failed to recreate directory: ${dir}`, mkdirErr);
+        }
+      }
+    }
+
     logger.info('Upload directories created successfully');
+
+    // Tulis file test untuk memastikan direktori dapat ditulis
+    try {
+      const testFile = path.join(uploadDir, '.test-write');
+      await fs.writeFile(testFile, 'test');
+      await fs.unlink(testFile);
+      logger.info('Upload directory is writable');
+    } catch (writeErr) {
+      logger.error('Upload directory is not writable:', writeErr);
+    }
   } catch (error) {
     logger.error('Failed to create upload directories:', error);
-    throw new Error('Failed to initialize upload directories');
+    // Jangan throw error, coba lanjutkan meskipun ada error
+    logger.warn('Continuing despite directory initialization error');
   }
 };
 
 // Panggil inisialisasi
-initializeUploadDir();
+initializeUploadDir().catch(err => {
+  logger.error('Error during directory initialization:', err);
+  // Jangan crash server jika inisialisasi gagal
+});
 
 // Tambahkan sanitasi filename
 const sanitizeFilename = (filename) => {

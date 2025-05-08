@@ -477,6 +477,69 @@ app.get('/api/check-file/:filename', (req, res) => {
   }
 });
 
+// Route untuk memeriksa direktori uploads
+app.get('/api/check-directories', (req, res) => {
+  try {
+    // Daftar direktori yang perlu diperiksa
+    const directories = [
+      'uploads',
+      'uploads/original',
+      'uploads/medium',
+      'uploads/thumbnail',
+      'uploads/temp',
+      'uploads/profiles',
+      'uploads/carousel'
+    ];
+
+    const results = {};
+
+    // Periksa setiap direktori
+    for (const dir of directories) {
+      const dirPath = path.join(__dirname, dir);
+      const exists = fs.existsSync(dirPath);
+
+      let isWritable = false;
+      let files = [];
+
+      if (exists) {
+        try {
+          // Coba tulis file test untuk memeriksa izin tulis
+          const testFile = path.join(dirPath, '.test-write');
+          fs.writeFileSync(testFile, 'test');
+          fs.unlinkSync(testFile);
+          isWritable = true;
+
+          // Baca daftar file dalam direktori
+          files = fs.readdirSync(dirPath)
+            .filter(file => !file.startsWith('.')) // Abaikan file tersembunyi
+            .slice(0, 10); // Batasi 10 file saja
+        } catch (error) {
+          logger.error(`Error checking directory ${dir}:`, error);
+        }
+      }
+
+      results[dir] = {
+        exists,
+        isWritable,
+        files,
+        path: dirPath
+      };
+    }
+
+    res.json({
+      success: true,
+      directories: results
+    });
+  } catch (error) {
+    logger.error('Error checking directories:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error checking directories',
+      error: error.message
+    });
+  }
+});
+
 // API Routes
 // Tambahkan middleware untuk menangani permintaan ke /auth/refresh-token
 app.get('/auth/refresh-token', (req, res) => {
