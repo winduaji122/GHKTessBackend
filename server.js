@@ -1091,6 +1091,10 @@ app.use('/api/upload', uploadRoutes);
 // Tambahkan route baru untuk image API dengan kompresi
 app.use('/api/images', imageRoutes);
 
+// Tambahkan route baru untuk database gambar
+const imageDbRoutes = require('./routes/imageDbRoutes');
+app.use('/api/images', imageDbRoutes);
+
 app.use('/api/carousel', carouselRoutes);
 app.use('/api/carousel-post', carouselPostRoutes);
 
